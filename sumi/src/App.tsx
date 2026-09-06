@@ -19,6 +19,7 @@ import { runtimeConfig } from './config/runtime';
 import { ExtensionServiceImpl } from './service/extension';
 import type { ExtensionMetadata } from './service/extension';
 import { urlWorkspace, getWorkspace, appBaseUrl } from './infra/url';
+import { isPersistedDarkTheme } from './infra/theme';
 import { APP_CHAT_CONFIG } from './config/brand';
 import './styles/overrides.css';
 import './styles/slots.css';
@@ -32,8 +33,9 @@ const BRAND = APP_CHAT_CONFIG.brand;
  * 品牌文案一律来自 config/brand.ts (单一来源), 不在此硬编码.
  */
 function SplashScreen(): React.JSX.Element {
+  const dark = isPersistedDarkTheme();
   return (
-    <div className="numas-splash" role="status" aria-live="polite">
+    <div className={dark ? 'numas-splash numas-splash--dark' : 'numas-splash'} role="status" aria-live="polite">
       <div className="numas-splash-logo">{BRAND.logo}</div>
       <div className="numas-splash-spinner" />
       <div className="numas-splash-title">{BRAND.name}</div>
@@ -115,12 +117,10 @@ export const App: React.FC = () => {
         //   → 编辑器 fallback 主线程 "现在无法访问编辑器". jsdelivr / npmmirror 有文件.
         componentCDNType: 'jsdelivr',
         useSimplifyExplorerPanel: true, // 去掉 explorer 容器里的「打开的编辑器」「大纲」section
-        // 槽位尺寸单一事实源 (SlotRenderer 上的 defaultSize/minSize 等 prop 已被外层忽略,
-        //   见 sumi/src/layout.tsx 注释)
+        // 初始宽度; 拖拽下限在 layout.tsx 的 SlotRenderer minResize
         panelSizes: {
           [SlotLocation.left]: 268,   // explorer
-          [SlotLocation.right]: 468,  // chat (sumi/src/extensions/chat/module.ts: SlotLocation.right)
-          [SlotLocation.bottom]: 200,  // terminal / output / markers
+          [SlotLocation.right]: 468,  // chat 默认宽; 最小宽 280 (layout.tsx minResize)
         },
         defaultPreferences: preferences,
         extensionMetadata: extensionMetadata as any,

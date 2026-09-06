@@ -62,7 +62,9 @@ export const WelcomeView: React.FC<{ resource?: any }> = () => {
       <style>{STYLES}</style>
       <div className="ab-welcome__inner">
         <div className="ab-welcome__logo">
-          {brand.logo ? (
+          {brand.logoUrl ? (
+            <img className="ab-welcome__logo-img" src={brand.logoUrl} alt={brand.name || ''} />
+          ) : brand.logo ? (
             <span style={{ fontSize: 30, fontWeight: 700 }}>{brand.logo}</span>
           ) : (
             <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -102,13 +104,19 @@ const STYLES = `
   max-width: 560px; width: 100%;
 }
 .ab-welcome__logo {
-  width: 72px; height: 72px;
-  border-radius: 18px;
-  background: var(--button-background, var(--vscode-button-background, #2563eb));
+  width: 48px; height: 48px;
+  border-radius: 12px;
+  background: transparent;
   color: var(--button-foreground, var(--vscode-button-foreground, #fff));
   display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--button-background, #2563eb) 30%, transparent);
+  box-shadow: none;
   margin-bottom: 14px;
+  overflow: hidden;
+}
+.ab-welcome__logo-img {
+  width: 100%; height: 100%;
+  object-fit: cover; display: block;
+  border-radius: 12px;
 }
 .ab-welcome__title {
   margin: 0; font-size: 28px; font-weight: 700; letter-spacing: 0.5px;

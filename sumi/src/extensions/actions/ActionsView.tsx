@@ -6,6 +6,7 @@ import { PreferenceService } from '@opensumi/ide-core-browser/lib/preferences';
 import { PreferenceScope } from '@opensumi/ide-core-common/lib/preferences/preference-scope';
 
 import { getWorkspace, subscribeWorkspace } from '../../infra/url';
+import { cacheUiTheme, THEME_DARK, THEME_KEY, THEME_LIGHT } from '../../infra/theme';
 import { APP_CHAT_CONFIG } from '../../config/brand';
 import { BrowserToken, type IBrowserService } from '../browser';
 
@@ -13,10 +14,6 @@ function requestShowPicker(): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent('workspace:request-show'));
 }
-
-const THEME_DARK = 'opensumi-design-dark-theme';
-const THEME_LIGHT = 'opensumi-design-light-theme';
-const THEME_KEY = 'general.theme';
 
 /**
  * ActionsView — 顶栏 (top 槽位)
@@ -37,7 +34,7 @@ export const ActionsView: React.FC = () => {
   const [leftVisible, setLeftVisible] = useState(false);
   const [bottomVisible, setBottomVisible] = useState(false);
   const [rightVisible, setRightVisible] = useState(true);
-  const [isDark, setIsDark] = useState(true);
+  const [isDark, setIsDark] = useState(false);
 
   // 品牌/logo 单一来源: config/brand.ts
   const brand = useMemo(() => APP_CHAT_CONFIG.brand, []);
@@ -61,11 +58,15 @@ export const ActionsView: React.FC = () => {
   const workspaceFull = workspace || '';
 
   useEffect(() => {
-    const current = preferenceService.get<string>(THEME_KEY, THEME_DARK);
-    setIsDark(current !== THEME_LIGHT);
+    const current = preferenceService.get<string>(THEME_KEY, THEME_LIGHT);
+    const dark = current !== THEME_LIGHT;
+    setIsDark(dark);
+    cacheUiTheme(dark);
     const disposable = preferenceService.onPreferenceChanged((e) => {
       if (e.preferenceName === THEME_KEY) {
-        setIsDark(e.newValue !== THEME_LIGHT);
+        const nextDark = e.newValue !== THEME_LIGHT;
+        setIsDark(nextDark);
+        cacheUiTheme(nextDark);
       }
     });
     return () => disposable.dispose?.();
@@ -73,6 +74,7 @@ export const ActionsView: React.FC = () => {
 
   const toggleTheme = () => {
     const next = isDark ? THEME_LIGHT : THEME_DARK;
+    cacheUiTheme(!isDark);
     void preferenceService.set(THEME_KEY, next, PreferenceScope.User);
   };
 

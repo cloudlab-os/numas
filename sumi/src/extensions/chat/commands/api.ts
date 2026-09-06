@@ -15,6 +15,7 @@
  */
 
 import { opencodeFetch } from './opencodeFetch';
+import { getWorkspace, workspaceHeader } from '../../../infra/url';
 
 // re-export 通用 fetch (让 chat 端只 import 一个 api 入口)
 export { opencodeFetch } from './opencodeFetch';
@@ -29,21 +30,19 @@ export function getGlobalOpencodeRuntime() {
   return (window as any).__APP_OPENCODE_RUNTIME__ || {};
 }
 
-/** 当前工作目录 (跟 service/env.effectiveCwd 同一逻辑) — 传给 SDK 的 directory query
- *  SDK 已带 x-opencode-directory header, 显式传 directory 是冗余但更稳, 防止 SDK header
- *  失效 (e.g. APP_CWD 未设, runtime.cwd 还没注入) 时 opencode 走 home 解析 */
+/** 当前工作目录 — 唯一事实源 URL `?directory=` (铁律: 不读 APP_CWD / runtime.cwd) */
 function getAiDirectory(): string {
-  if (typeof localStorage !== 'undefined') {
-    const v = localStorage.getItem('APP_CWD');
-    if (v) return v;
-  }
-  return getGlobalOpencodeRuntime().cwd || '.';
+  return getWorkspace() || '';
 }
 
-/** x-opencode-directory header (跟 service/env.cwdHeader 同一逻辑) — 备用, 给 fetch 兜底 */
+/** x-opencode-directory: 每次现取 workspace, 避免 SDK 创建时冻住的 header 过期 */
 function getAiCwdHeader(): Record<string, string> {
-  const cwd = getAiDirectory();
-  return cwd && cwd !== '.' ? { 'x-opencode-directory': encodeURI(cwd) } : {};
+  return workspaceHeader();
+}
+
+/** SDK 请求 options: 强制带上当前 workspace header */
+function withWorkspaceOpts(extra?: Record<string, any>) {
+  return { ...extra, headers: { ...(extra?.headers || {}), ...getAiCwdHeader() } };
 }
 
 export function getAiClient() {
@@ -353,7 +352,8 @@ export async function aiClearMessages(sessionID: string): Promise<number> {
   return deleted;
 }
 
-/** 回答 A2UI question — client.question.reply({ requestID, answers }) (v1 路径) */
+/** 回答 A2UI question — POST /question/{requestID}/reply
+ *  requestID 必须是 que_ 前缀. 每次带上当前 workspace header. */
 export async function aiReplyQuestion(
   sessionID: string,
   requestID: string,
@@ -361,19 +361,31 @@ export async function aiReplyQuestion(
 ): Promise<void> {
   await waitForAiReady();
   const client = getAiClient()!;
-  const { error } = await (client as any).question.reply({ requestID, answers });
+  if (!isQuestionRequestID(requestID)) {
+    throw new Error(`question requestID 无效 (需要 que_ 前缀): ${requestID || '(empty)'}`);
+  }
+  const { error } = await (client as any).question.reply(
+    { requestID, answers },
+    withWorkspaceOpts(),
+  );
   if (error) throw error;
 }
 
-/** 忽略 A2UI question — client.question.reject({ requestID }) (v1 路径, 告诉 AI 不再问) */
+/** 忽略 A2UI question — POST /question/{requestID}/reject */
 export async function aiRejectQuestion(sessionID: string, requestID: string): Promise<void> {
   await waitForAiReady();
   const client = getAiClient()!;
-  const { error } = await (client as any).question.reject({ requestID });
+  if (!isQuestionRequestID(requestID)) {
+    throw new Error(`question requestID 无效 (需要 que_ 前缀): ${requestID || '(empty)'}`);
+  }
+  const { error } = await (client as any).question.reject(
+    { requestID },
+    withWorkspaceOpts(),
+  );
   if (error) throw error;
 }
 
-/** 回复工具权限请求 — POST /session/{id}/permissions/{permissionID}, response: once/always/reject */
+/** 回复工具权限请求 — POST /permission/{requestID}/reply */
 export async function aiReplyPermission(
   sessionID: string,
   permissionID: string,
@@ -381,11 +393,16 @@ export async function aiReplyPermission(
 ): Promise<void> {
   await waitForAiReady();
   const client = getAiClient()!;
-  const { error } = await (client as any).postSessionIdPermissionsPermissionId({
-    path: { id: sessionID, permissionID },
-    body: { response },
-  });
+  // v2 client: permission.reply({ requestID, reply }); 旧 postSessionIdPermissions* 在 v2 上不存在
+  const { error } = await (client as any).permission.reply(
+    { requestID: permissionID, reply: response },
+    withWorkspaceOpts(),
+  );
   if (error) throw error;
+}
+
+function isQuestionRequestID(id: unknown): id is string {
+  return typeof id === 'string' && id.startsWith('que');
 }
 
 export interface ModelInfo {

@@ -61,9 +61,9 @@ export const Markdown: React.FC<{ content: string; streaming?: boolean; expand?:
       <style>{`
         .chat-md { position: relative; }
         .chat-md__body {
-          font-size: 13px;
-          line-height: 1.6;
-          color: var(--editor-foreground, var(--vscode-editor-foreground));
+          font-size: 14px;
+          line-height: 22px;
+          color: var(--ai-fg, var(--editor-foreground, var(--vscode-editor-foreground)));
           word-break: break-word;
         }
         .chat-md__body p, .chat-md__body blockquote, .chat-md__body ul, .chat-md__body ol,

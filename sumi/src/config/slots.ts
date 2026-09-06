@@ -32,11 +32,7 @@ export function buildSlots(): Slots {
         ]
       },
       [SlotLocation.bottom]: {
-        modules: [
-          '@opensumi/ide-terminal-next',
-          '@opensumi/ide-output',
-          '@opensumi/ide-markers',
-        ],
+        modules: [],
       },
       [SlotLocation.extra]: {
         modules: []

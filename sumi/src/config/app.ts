@@ -19,6 +19,8 @@ export interface AppConfig {
   workspaceDir: string;
   theme: string;
   chatConfig: typeof APP_CHAT_CONFIG;
+  /** Chat 输入栏「选择工作空间」按钮；运行时可注入，默认不显示 */
+  showWorkspacePicker: boolean;
 }
 
 function buildAppConfig(): AppConfig {
@@ -29,8 +31,9 @@ function buildAppConfig(): AppConfig {
     registryBaseUrl: injected.registryBaseUrl || __APP_REGISTRY_BASE_URL__ || '',
     deployEnv: injected.deployEnv || __APP_DEPLOY_ENV__ || 'development',
     workspaceDir: WORKSPACE_ROOT,
-    theme: 'opensumi-design-dark-theme',
+    theme: 'opensumi-design-light-theme',
     chatConfig: APP_CHAT_CONFIG,
+    showWorkspacePicker: injected.showWorkspacePicker === true,
   };
 }
 

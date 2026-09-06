@@ -1,32 +1,42 @@
 import React from 'react';
-import { getBrand } from '../../scheme';
+import { getEmptyState, formatBrand } from '../../scheme';
 
 interface ConnectingViewProps {
   /** 全局 opencode 用户信息 (window.__APP_OPENCODE_RUNTIME__) */
   user?: { userId?: string; tenantId?: string; deployEnv?: string } | null;
 }
 
-/** opencode 实例连接中占位 — 无登录逻辑, 用户信息来自全局 runtime */
+/** opencode 实例连接中占位 — 文案/布局与空状态 (WelcomeScreen) 对齐 */
 export const ConnectingView: React.FC<ConnectingViewProps> = ({ user }) => {
-  const brand = getBrand();
+  const empty = getEmptyState();
+  if (!empty) return null;
+
   return (
-    <div className="chat__gate">
-      {brand && <div className="chat__gate-logo"><span>{brand.logo}</span></div>}
-      <h2 className="chat__gate-title">正在连接 {brand?.title || 'AI'} …</h2>
-      <ul className="chat__gate-features">
-        <li>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          <span>集成丰富上下文，回答更准确</span>
-        </li>
-        <li>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-          <span>开放智能体生态，满足多样任务需求</span>
-        </li>
-        <li>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-          <span>理解需求、调动工具、端到端完成真实任务</span>
-        </li>
-      </ul>
+    <div className="chat__welcome">
+      <div className="chat__welcome-brand">
+        {empty.logoUrl ? (
+          <img className="chat__welcome-logo-img" src={empty.logoUrl} alt={empty.name} />
+        ) : (
+          <div className="chat__welcome-logo">{empty.logo}</div>
+        )}
+        <h1 className="chat__welcome-title">{formatBrand(empty.greeting, empty)}</h1>
+      </div>
+      <p className="chat__welcome-sub">{empty.subtitle}</p>
+      <p className="chat__welcome-sub">正在连接 {empty.title} …</p>
+      {empty.features.length > 0 && (
+        <ul className="chat__welcome-features">
+          {empty.features.map((text, i) => (
+            <li key={i} className="chat__welcome-feature">
+              <span className="chat__welcome-check" aria-hidden="true">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </span>
+              <span>{text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {user?.userId && (
         <div className="chat__gate-user">当前用户: {user.userId}{user.deployEnv ? ` · ${user.deployEnv}` : ''}</div>
       )}
