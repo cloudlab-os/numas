@@ -74,6 +74,7 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
         const exit = yield* Effect.exit(boot({ ...input, directory }))
         if (Exit.isFailure(exit)) yield* removeEntry(directory, entry)
         yield* Deferred.done(entry.deferred, exit).pipe(Effect.asVoid)
+        if (Exit.isSuccess(exit)) yield* emitReloaded({ directory, project: input.project?.id })
       })
 
     const emitDisposed = (input: { directory: string; project?: string }) =>
@@ -84,6 +85,21 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
           workspace: WorkspaceContext.workspaceID,
           payload: {
             type: "server.instance.disposed",
+            properties: {
+              directory: input.directory,
+            },
+          },
+        }),
+      )
+
+    const emitReloaded = (input: { directory: string; project?: string }) =>
+      Effect.sync(() =>
+        GlobalBus.emit("event", {
+          directory: input.directory,
+          project: input.project,
+          workspace: WorkspaceContext.workspaceID,
+          payload: {
+            type: "instance.reloaded",
             properties: {
               directory: input.directory,
             },
