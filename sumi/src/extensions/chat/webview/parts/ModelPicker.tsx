@@ -52,8 +52,8 @@ export const ModelPicker: React.FC<Props> = ({
   const [error, setError] = useState('');
   const [allProviders, setAllProviders] = useState<ProviderInfo[] | null>(null);
   const [, forceTick] = useState(0);
-  /** 键盘导航高亮索引; -1 = 尚未用方向键, 不显示 is-highlighted */
-  const [activeIndex, setActiveIndex] = useState(-1);
+  /** 键盘导航高亮索引 (ArrowUp/Down + Enter/Tab) */
+  const [activeIndex, setActiveIndex] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
   const keyRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -197,14 +197,13 @@ export const ModelPicker: React.FC<Props> = ({
     return [];
   }, [view, selectGroups, filteredCatalog]);
 
-  // 搜索/视图变化时清掉键盘高亮 (等用户再按方向键)
+  // 搜索/视图变化时重置高亮到首个匹配
   useEffect(() => {
-    setActiveIndex(-1);
+    setActiveIndex(0);
   }, [query, view.kind, view.kind === 'select' ? (view as any).filterProvider : undefined]);
 
   // 高亮项跟随滚动进入视野 (仅滚动 modal-body 容器, 避免整页跳动)
   useEffect(() => {
-    if (activeIndex < 0) return;
     const body = bodyRef.current;
     if (!body) return;
     const el = body.querySelector('.is-highlighted');
@@ -221,16 +220,15 @@ export const ModelPicker: React.FC<Props> = ({
     if (n === 0) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setActiveIndex((i) => (i < 0 ? 0 : (i + 1) % n));
+      setActiveIndex((i) => (i + 1) % n);
       return;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setActiveIndex((i) => (i < 0 ? n - 1 : (i - 1 + n) % n));
+      setActiveIndex((i) => (i - 1 + n) % n);
       return;
     }
     if (e.key === 'Enter' && !e.shiftKey) {
-      if (activeIndex < 0) return;
       e.preventDefault();
       const it = navItems[activeIndex];
       if (!it) return;
@@ -246,7 +244,6 @@ export const ModelPicker: React.FC<Props> = ({
       return;
     }
     if (e.key === 'Tab') {
-      if (activeIndex < 0) return;
       e.preventDefault();
       const it = navItems[activeIndex];
       if (!it) return;
@@ -331,7 +328,7 @@ export const ModelPicker: React.FC<Props> = ({
                   {g.items.map((it) => {
                     const active = isCurrent(it);
                     const idx = (navItems as SelectItem[]).indexOf(it);
-                    const highlighted = activeIndex >= 0 && idx === activeIndex;
+                    const highlighted = idx === activeIndex;
                     return (
                       <div
                         key={`${it.providerID}::${it.modelID}`}
@@ -405,7 +402,7 @@ export const ModelPicker: React.FC<Props> = ({
                     <button
                       key={p.id}
                       type="button"
-                      className={`chat__modal-catrow${p.connected ? ' is-connected' : ''}${activeIndex >= 0 && pi === activeIndex ? ' is-highlighted' : ''}`}
+                      className={`chat__modal-catrow${p.connected ? ' is-connected' : ''}${pi === activeIndex ? ' is-highlighted' : ''}`}
                       onClick={() => { setView({ kind: 'apikey', provider: p }); setApiKey(''); setError(''); }}
                     >
                       <span className="chat__modal-caticon" aria-hidden="true">

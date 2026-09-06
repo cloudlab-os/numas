@@ -25,13 +25,11 @@ export const PartRenderer: React.FC<{
   sessionID: string;
   onReply: (sid: string, rid: string, answers: string[][]) => Promise<void>;
   onAbortSession?: (sid: string) => void;
-  /** 本条是消息列表末条 */
-  latest?: boolean;
   preferredQuestionRequestID?: string;
   preferredQuestionQuestions?: any[];
-  /** 用户已点「取消」abort */
-  questionCancelled?: boolean;
-}> = ({ part, streaming, done, sessionID, onReply, onAbortSession, latest, preferredQuestionRequestID, preferredQuestionQuestions, questionCancelled }) => {
+  /** 对话是否正忙: 仅 busy 时显示提交按钮等交互 */
+  busy?: boolean;
+}> = ({ part, streaming, done, sessionID, onReply, onAbortSession, preferredQuestionRequestID, preferredQuestionQuestions, busy }) => {
   if (!part || part.synthetic || part.ignored) return null;
 
   switch (part.type) {
@@ -77,10 +75,8 @@ export const PartRenderer: React.FC<{
               onReply={onReply}
               onAbort={onAbortSession}
               streaming={streaming}
-              latest={latest}
               preferredRequestID={preferredQuestionRequestID}
-              preferredQuestions={preferredQuestionQuestions}
-              cancelled={questionCancelled}
+              busy={busy}
             />
           );
         }

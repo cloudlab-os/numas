@@ -13,8 +13,8 @@ export const WorkspaceView: React.FC = () => {
         <div className="ws-icon">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor" opacity="0.2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         </div>
-        <div className="ws-title">尚未打开工作空间</div>
-        <div className="ws-desc">请在右侧 AI 工作台 (chat) 输入框内选择工作空间</div>
+        <div className="ws-title">尚未打开工作目录</div>
+        <div className="ws-desc">请在右侧 AI 工作台 (chat) 输入框底部选择工作目录</div>
       </div>
     </div>
   );

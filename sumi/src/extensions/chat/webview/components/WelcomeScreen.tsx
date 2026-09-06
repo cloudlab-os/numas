@@ -1,37 +1,29 @@
 import React from 'react';
-import { getEmptyState, formatBrand } from '../../scheme';
+import { getBrand, getSuggestions, formatBrand, type ChatSuggestion } from '../../scheme';
 
 export const WelcomeScreen: React.FC<{
-  onPick?: (prompt: string) => void;
-}> = () => {
-  const empty = getEmptyState();
-  if (!empty) return null;
-
+  onPick: (prompt: string) => void;
+}> = ({ onPick }) => {
+  const brand = getBrand();
+  const suggestions: ChatSuggestion[] = getSuggestions().length
+    ? getSuggestions(): [];
   return (
     <div className="chat__welcome">
-      <div className="chat__welcome-brand">
-        {empty.logoUrl ? (
-          <img className="chat__welcome-logo-img" src={empty.logoUrl} alt={empty.name} />
-        ) : (
-          <div className="chat__welcome-logo">{empty.logo}</div>
-        )}
-        <h1 className="chat__welcome-title">{formatBrand(empty.greeting, empty)}</h1>
+      {brand && <div className="chat__welcome-logo">{brand.logo}</div>}
+      {brand && <h1 className="chat__welcome-title">{formatBrand(brand.greeting, brand)}</h1>}
+      {brand && <p className="chat__welcome-sub">{brand.subtitle}</p>}
+
+      <div className="chat__welcome-suggest">
+        {suggestions.map((s, i) => (
+          <button key={i} className="chat__suggest" onClick={() => onPick(s.prompt)}>
+            <span className="chat__suggest-icon">{s.icon}</span>
+            <span className="chat__suggest-body">
+              <span className="chat__suggest-title">{s.title}</span>
+              <span className="chat__suggest-desc">{s.desc}</span>
+            </span>
+          </button>
+        ))}
       </div>
-      <p className="chat__welcome-sub">{empty.subtitle}</p>
-      {empty.features.length > 0 && (
-        <ul className="chat__welcome-features">
-          {empty.features.map((text, i) => (
-            <li key={i} className="chat__welcome-feature">
-              <span className="chat__welcome-check" aria-hidden="true">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              </span>
-              <span>{text}</span>
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 };

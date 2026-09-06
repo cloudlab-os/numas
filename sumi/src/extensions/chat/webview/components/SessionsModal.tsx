@@ -118,7 +118,7 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
       className="chat__modal-overlay"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="chat__modal chat__sess-modal" role="dialog" aria-modal="true">
+      <div className="chat__modal" role="dialog" aria-modal="true">
         <div className="chat__modal-header">
           <div className="chat__modal-header-text">
             <div className="chat__modal-title">
@@ -154,7 +154,7 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
             </div>
           )}
           {groups.map((g) => (
-            <div key={g.label} className="chat__modal-group chat__sess-group">
+            <div key={g.label} className="chat__modal-group">
               <div className="chat__modal-group-title">{g.label} · {g.items.length}</div>
                   {g.items.map((s) => {
                 const active = s.id === currentID;

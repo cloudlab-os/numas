@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useInjectable } from '@opensumi/ide-core-browser/lib/react-hooks/injectable-hooks';
-import { CommandService, URI, BinaryBuffer } from '@opensumi/ide-core-common';
+import { CommandService } from '@opensumi/ide-core-common';
 import { SlotLocation } from '@opensumi/ide-core-browser';
 import { IMainLayoutService } from '@opensumi/ide-main-layout/lib/common';
-import { IFileServiceClient } from '@opensumi/ide-file-service';
 
 import { FsToken, type IFileSystem } from '@/service/filesystem';
 
@@ -29,17 +28,15 @@ import { ModelPicker } from './parts/ModelPicker';
 
 import {
   Row, HIDDEN_AGENTS, AGENT_ICONS, AGENT_DESC, CLIENT_COMMANDS,
-  extractText, bytesToBase64, collectTurnStats, isAssistantTurnEnd, assistantTurnHasVisibleContent,
-  isHiddenEmptyHistoricalAssistant,
-  getQuestionStore, subscribeQuestionChange, setQuestion, clearQuestion, markQuestionCancelled,
+  extractText, formatDuration, bytesToBase64,
+  getQuestionStore, subscribeQuestionChange, setQuestion, clearQuestion,
 } from './helpers';
-import { registerChatPanelApi, contextItemKey, formatContextNote, parseComposerFromUserMessage, type ChatContextItem, type AddContextResult, type ComposerSnapshot } from '../commands/chatApi';
-import { getEmptyState } from '../scheme';
+import { getBrand } from '../scheme';
+import { registerChatPanelApi } from '../commands/chatApi';
 import { styles } from './styles';
-import { themeStyles } from './theme';
 import { ConnectingView } from './components/ConnectingView';
 import { WelcomeScreen } from './components/WelcomeScreen';
-import { MessageRow, PendingReply } from './components/MessageRow';
+import { MessageRow } from './components/MessageRow';
 import { SessionsModal } from './components/SessionsModal';
 import { SkillsModal } from './components/SkillsModal';
 import { Portal } from './parts/Portal';
@@ -48,76 +45,23 @@ function loadClientCmds() {
   return CLIENT_COMMANDS.map((c) => ({ cmd: c.cmd, name: c.desc, hint: c.hint || '', source: 'client-cmd' as const }));
 }
 
-function readEditorText(el: HTMLElement): string {
-  const t = (el.innerText || '').replace(/\u00a0/g, ' ');
-  return t === '\n' ? '' : t;
-}
-
-function moveCaretToEnd(el: HTMLElement) {
-  const range = document.createRange();
-  range.selectNodeContents(el);
-  range.collapse(false);
-  const sel = window.getSelection();
-  sel?.removeAllRanges();
-  sel?.addRange(range);
-}
-
-function caretOnFirstLastLine(el: HTMLElement): { first: boolean; last: boolean } {
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0 || !el.contains(sel.anchorNode)) {
-    return { first: true, last: true };
-  }
-  const range = sel.getRangeAt(0);
-  const before = document.createRange();
-  before.selectNodeContents(el);
-  before.setEnd(range.startContainer, range.startOffset);
-  const after = document.createRange();
-  after.selectNodeContents(el);
-  after.setStart(range.endContainer, range.endOffset);
-  return {
-    first: !before.toString().includes('\n'),
-    last: !after.toString().includes('\n'),
-  };
-}
-
-/** 按 cwd 生成 localStorage key. 最后段的可读名 (raw, 任意 unicode) + 8位哈希防碰撞:
- *  - 保留 CJK 可读性 (浏览 localStorage 时一眼看出是哪个目录)
+/** 按 cwd 生成 sessionStorage key. 最后段的可读名 (raw, 任意 unicode) + 8位哈希防碰撞:
+ *  - 保留 CJK 可读性 (浏览 sessionStorage 时一眼看出是哪个目录)
  *  - 哈希防同名目录 (如 ~/a 和 ~/b 但只是同名, 哈希区分) / 超长路径截断
  *  - 切工作目录后 key 变, 旧 session 不会跨目录复用, 避免 session.directory 跟当前 cwd 不一致. */
 function sessionKeyFor(cwd: string): string {
   if (!cwd) return 'chat.sessionID.default';
-  // djb2 哈希 (非加密, localStorage 标识够用, 32-bit → 8 位 hex)
+  // djb2 哈希 (非加密, sessionStorage 标识够用, 32-bit → 8 位 hex)
   let hash = 5381;
   for (let i = 0; i < cwd.length; i++) {
     hash = ((hash << 5) + hash) + cwd.charCodeAt(i);
   }
   const hex = (hash >>> 0).toString(16).padStart(8, '0');
-  // 最后一段做可读短名 (POSIX / Windows 分隔, 取 unicode 字符, 限 12 字符)
-  const lastSeg = (cwd.split(/[/\\]/).filter(Boolean).pop() || '').trim().slice(0, 12);
+  // 最后一段做可读短名 (取 unicode 字符, 限 12 字符, 空白 trim)
+  const lastSeg = (cwd.split('/').filter(Boolean).pop() || '').trim().slice(0, 12);
+  // 不可见字符或空 fallback
   const readable = lastSeg.replace(/[\x00-\x1F\x7F]/g, '') || 'cwd';
   return `chat.sessionID.${readable}-${hex}`;
-}
-
-function requestShowPicker(): void {
-  if (typeof window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent('workspace:request-show'));
-}
-
-function chatAttachFilePath(fileName: string, mime: string, ts: number, rnd: string, idx: number): string {
-  const fromMime = mime.split('/')[1]?.split(';')[0].replace(/[^\w]/g, '');
-  const ext = (fileName.match(/\.[a-z0-9]{1,5}$/i)?.[0]
-    || (fromMime ? `.${fromMime}` : '')).toLowerCase();
-  const base = (fileName || 'file')
-    .replace(/\.[a-z0-9]{1,5}$/i, '')
-    .replace(/[^\w.\-\u4e00-\u9fa5]/g, '_')
-    .slice(0, 60) || 'file';
-  return `/${base}-${ts}-${rnd}-${idx}${ext}`;
-}
-
-function chatAttachLabel(fileName: string, mime: string): string {
-  if (mime.startsWith('image/')) return '图片';
-  const n = (fileName || '').replace(/^.*[/\\]/, '').trim();
-  return n || '文件';
 }
 
 /** /session/status 会话状态 (与 opencode SessionStatus.Info 对齐):
@@ -198,25 +142,11 @@ export const Chat: React.FC = () => {
   sessionIDRef.current = sessionID;
   const [sessions, setSessions] = useState<any[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
-  const userPrompts = useMemo(() => rows.flatMap((r) => {
-    if (r.role !== 'user') return [];
-    const snap = parseComposerFromUserMessage(extractText(r.parts), r.parts);
-    if (!snap.body && !snap.contextItems.length && !snap.attachments.length) return [];
-    return [snap];
-  }), [rows]);
   const [input, setInput] = useState('');
   // 会话状态按 sid 维护 (busy/retry/idle + retry 细节): SSE 事件即时更新 + 15s 对账全量校准;
   // 渲染/发送时取当前会话. retry 期间 isBusyStatus=true (锁发送/可停止) + 状态条展示原因
   const [statusBySession, setStatusBySession] = useState<Record<string, SessionStatusInfo>>({});
   const busy = isBusyStatus(statusBySession[sessionID]);
-  const [generationStopped, setGenerationStopped] = useState(false);
-  // 点发送后立刻占位: 不跟 server busy 绑死 (新建会话 / promptAsync 往返会空一截)
-  const [awaitingReply, setAwaitingReply] = useState(false);
-  const awaitingReplyRef = useRef(false);
-  const setAwaitingReplyBoth = (v: boolean) => {
-    awaitingReplyRef.current = v;
-    setAwaitingReply(v);
-  };
   // 当前会话完整状态 (retry 时驱动输入框上方的状态条)
   const curStatus = statusBySession[sessionID];
   const [agents, setAgents] = useState<any[]>([]);
@@ -248,11 +178,6 @@ export const Chat: React.FC = () => {
     return unsub;
   }, []);
   const [attachments, setAttachments] = useState<Array<{ name: string; path: string; dataUrl?: string }>>([]);
-  const attachmentsRef = useRef(attachments);
-  attachmentsRef.current = attachments;
-  const [contextItems, setContextItems] = useState<ChatContextItem[]>([]);
-  const contextItemsRef = useRef<ChatContextItem[]>([]);
-  contextItemsRef.current = contextItems;
   /** 上传进度: { '<path>': 0..1 } — 上传中显示进度条 */
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
   const [previewAttachment, setPreviewAttachment] = useState<{ name: string; path: string; dataUrl?: string } | null>(null);
@@ -288,23 +213,7 @@ export const Chat: React.FC = () => {
   }, [showNotice]);
   const [ready, setReady] = useState<boolean>(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const taRef = useRef<HTMLDivElement>(null);
-  const promptHistIndex = useRef(-1);
-  const promptHistDraft = useRef<ComposerSnapshot>({ body: '', contextItems: [], attachments: [] });
-  const setComposerText = useCallback((value: string, caret: 'end' | 'keep' = 'keep') => {
-    setInput(value);
-    const el = taRef.current;
-    if (!el) return;
-    if (readEditorText(el) !== value) el.innerText = value;
-    if (caret !== 'end') return;
-    el.focus({ preventScroll: true });
-    requestAnimationFrame(() => moveCaretToEnd(el));
-  }, []);
-  const applyPromptHist = useCallback((snap: ComposerSnapshot) => {
-    setComposerText(snap.body, 'end');
-    setContextItems(snap.contextItems);
-    setAttachments(snap.attachments);
-  }, [setComposerText]);
+  const taRef = useRef<HTMLTextAreaElement>(null);
   const modelSearchRef = useRef<HTMLInputElement>(null);
 
   // 全局 opencode 用户信息 (webapp 启动期挂载, 无独立登录逻辑)
@@ -313,7 +222,7 @@ export const Chat: React.FC = () => {
     return rt ? { userId: rt.userId, tenantId: rt.tenantId, deployEnv: rt.deployEnv } : null;
   }, []);
 
-  // 工作空间状态 (上传附件 / @提及 + 输入栏内切目录入口;
+  // 工作空间状态 (供上传附件按钮 + @提及等使用, 切入口已上移到顶栏 logo 旁的全局按钮,
   // 通过 workspace:request-show 派发 → WorkspacePicker 居中模态)
   const [workspace, setWorkspace] = useState<string>(() => getWorkspace());
   useEffect(() => {
@@ -328,11 +237,6 @@ export const Chat: React.FC = () => {
       window.removeEventListener('runtime-ready', refresh);
     };
   }, []);
-  const showWorkspacePicker = !!(window as any).__APP_CONFIG__?.showWorkspacePicker;
-  const cwdName = useMemo(() => {
-    if (!workspace) return '选择工作空间';
-    return workspace.split(/[/\\]/).filter(Boolean).pop() || workspace;
-  }, [workspace]);
 
   // chat 可用性: 只看 opencode SDK 是否已初始化 (agent runtime 派发 runtime-ready 后
   // 把 client 挂到 window.__APP_OPENCODE__). 不依赖 APP_CWD —— 选了工作目录只是影响
@@ -375,11 +279,6 @@ export const Chat: React.FC = () => {
     const d = draftRef.current;
     draftRef.current = null;
     if (!d || d.used) return;
-    try {
-      const key = sessionKeyFor(getWorkspace());
-      if (localStorage.getItem(key) === d.sid) localStorage.removeItem(key);
-      if (sessionStorage.getItem(key) === d.sid) sessionStorage.removeItem(key);
-    } catch { /* */ }
     (client?.session.delete({ sessionID: d.sid }) as any)?.catch?.(() => {});
   }, [client]);
   useEffect(() => {
@@ -550,83 +449,34 @@ export const Chat: React.FC = () => {
         role: m.info?.role || m.role,
         parts: m.parts || m.info?.parts || [],
         time: m.info?.time || undefined,
-        tokens: m.info?.tokens || undefined,
-        cost: typeof m.info?.cost === 'number' ? m.info.cost : undefined,
-        modelID: m.info?.modelID || m.info?.model?.id || undefined,
       }));
       setRows(rs);
     } catch (e) { setApiError(e); }
   }, [client, setApiError]);
 
   useEffect(() => {
-    promptHistIndex.current = -1;
-    promptHistDraft.current = { body: '', contextItems: [], attachments: [] };
     if (sessionID) loadMessages(sessionID);
     else setRows([]);
   }, [sessionID, loadMessages]);
 
-  // sessionID 持久化到 localStorage (跨标签关闭仍保留), 跟当前 workspace 绑定.
-  // 启动顺序: 校验已存 id → 否则取服务端最近会话 → 都没有才建草稿.
-  // 切工作目录后 reload, 旧 SESSION_KEY 读不到 → 按新 cwd 恢复/建会话.
+  // sessionID 持久化到 sessionStorage, 跟当前 APP_CWD 绑定.
+  // 切工作目录后 reload, 旧 SESSION_KEY 读不到 → 触发 ensureDraft 建新 session (新 cwd 下)
+  // 这保证 session 的 directory 字段永远跟当前 cwd 一致, pwd 等 shell 命令结果正确
   const SESSION_KEY = useMemo(() => sessionKeyFor(getWorkspace()), []);
   // 仅启动时恢复一次上次会话. 注意: 不能依赖 sessionID 重跑 (restore 读 storage + write 写
   // storage 会形成 A↔B 乒乓 → applySessionToUI 反复 session.get → 请求洪流).
   // 顺手清掉 4a0b040 之前的旧版 'chat.sessionID' (无 cwd 后缀) 残留
   useEffect(() => {
     if (!ready || !client) return;
-    let cancelled = false;
-    (async () => {
-      // 清理旧版无 cwd 后缀 key; sessionStorage → localStorage 迁移一次
-      try {
-        localStorage.removeItem('chat.sessionID');
-        sessionStorage.removeItem('chat.sessionID');
-        const legacy = sessionStorage.getItem(SESSION_KEY);
-        if (legacy && !localStorage.getItem(SESSION_KEY)) {
-          localStorage.setItem(SESSION_KEY, legacy);
-        }
-        sessionStorage.removeItem(SESSION_KEY);
-      } catch { /* */ }
-
-      const saved = (() => {
-        try { return localStorage.getItem(SESSION_KEY); } catch { return null; }
-      })();
-
-      if (saved) {
-        try {
-          const r = await client.session.get({ sessionID: saved });
-          if (cancelled) return;
-          if (r?.data?.id) {
-            setSessionID(saved);
-            return;
-          }
-        } catch { /* 已删或无效 */ }
-        try { localStorage.removeItem(SESSION_KEY); } catch { /* */ }
-      }
-
-      // 优先复用最近一次会话, 避免每次进来都新建空会话
-      try {
-        const list = await aiListSessions();
-        if (cancelled) return;
-        const arr = Array.isArray(list) ? list : [];
-        setSessions(arr);
-        const sorted = [...arr].sort(
-          (a, b) => (b?.time?.updated || b?.time?.created || 0) - (a?.time?.updated || a?.time?.created || 0),
-        );
-        if (sorted[0]?.id) {
-          setSessionID(sorted[0].id);
-          return;
-        }
-      } catch { /* ignore */ }
-
-      if (!cancelled && !sessionIDRef.current) void ensureDraft();
-    })();
-    return () => { cancelled = true; };
+    try { sessionStorage.removeItem('chat.sessionID'); } catch { /* */ }
+    const saved = sessionStorage.getItem(SESSION_KEY);
+    if (saved && saved !== sessionID) { setSessionID(saved); return; }
+    if (!saved && !sessionID) { void ensureDraft(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, client]);
   useEffect(() => {
-    if (!sessionID) return;
-    try { localStorage.setItem(SESSION_KEY, sessionID); } catch { /* */ }
-  }, [sessionID, SESSION_KEY]);
+    if (sessionID) sessionStorage.setItem(SESSION_KEY, sessionID);
+  }, [sessionID]);
 
   // --- opencode SSE 事件流: 打字机式流式响应 (替代 500ms 轮询) ---
   // V2 SDK event.subscribe() → /api/event, 顶层 {id, type, data} 格式.
@@ -657,27 +507,12 @@ export const Chat: React.FC = () => {
     // 订阅前先对账一次
     void refreshSessionStatuses();
     let stopped = false;
-    const upsertRow = (
-      id: string,
-      role: Row['role'],
-      parts: any[],
-      time?: { created?: number; completed?: number },
-      extra?: { tokens?: Row['tokens']; cost?: number; modelID?: string },
-    ) => {
+    const upsertRow = (id: string, role: Row['role'], parts: any[], time?: { created?: number; completed?: number }) => {
       setRows((prev) => {
         const idx = prev.findIndex((r) => r.id === id);
-        const patch: Row = {
-          id,
-          role,
-          parts,
-          ...(time ? { time } : {}),
-          ...(extra?.tokens ? { tokens: extra.tokens } : {}),
-          ...(typeof extra?.cost === 'number' ? { cost: extra.cost } : {}),
-          ...(extra?.modelID ? { modelID: extra.modelID } : {}),
-        };
-        if (idx < 0) return [...prev, patch];
+        if (idx < 0) return [...prev, { id, role, parts, time }];
         const next = [...prev];
-        next[idx] = { ...next[idx], ...patch };
+        next[idx] = { ...next[idx], parts, ...(time ? { time } : {}) };
         return next;
       });
     };
@@ -702,11 +537,7 @@ export const Chat: React.FC = () => {
             if (ssid && st) {
               if (st.type === 'idle') {
                 setStatusBySession((prev) => ({ ...prev, [ssid]: { type: 'idle' } }));
-                if (ssid === sessionIDRef.current) {
-                  awaitingReplyRef.current = false;
-                  setAwaitingReply(false);
-                  void loadMessages(ssid);
-                }
+                if (ssid === sessionIDRef.current) void loadMessages(ssid);
               } else {
                 setStatusBySession((prev) => ({ ...prev, [ssid]: st }));
               }
@@ -715,13 +546,7 @@ export const Chat: React.FC = () => {
           }
           if (type === 'session.idle') {
             const ssid = properties.sessionID;
-            if (ssid) {
-              setStatusBySession((prev) => ({ ...prev, [ssid]: { type: 'idle' } }));
-              if (ssid === sessionIDRef.current) {
-                awaitingReplyRef.current = false;
-                setAwaitingReply(false);
-              }
-            }
+            if (ssid) setStatusBySession((prev) => ({ ...prev, [ssid]: { type: 'idle' } }));
             return;
           }
           // 只处理当前会话的事件
@@ -795,11 +620,7 @@ export const Chat: React.FC = () => {
                   return prev;
                 });
               } else if (info.parts?.length) {
-                upsertRow(info.id, info.role, info.parts, info.time, {
-                  tokens: info.tokens,
-                  cost: typeof info.cost === 'number' ? info.cost : undefined,
-                  modelID: info.modelID || info.model?.id,
-                });
+                upsertRow(info.id, info.role, info.parts, info.time);
               }
               break;
             }
@@ -839,15 +660,11 @@ export const Chat: React.FC = () => {
               break;
             }
             case 'question.asked': {
-              // A2UI 提问: 存 que_xxx + tool.callID (QuestionCard 用 que_ 作 reply; callID 用于匹配 part)
+              // A2UI 提问: 存 que_xxx (持久化, QuestionCard 用它取 requestID); 卡片在消息流内直接交互, 无弹窗
               const qid = properties.id;
               const qsid = properties.sessionID;
               if (qid && qsid) {
-                setQuestion(qsid, {
-                  requestID: qid,
-                  questions: properties.questions || [],
-                  callID: properties.tool?.callID || properties.callID,
-                });
+                setQuestion(qsid, { requestID: qid, questions: properties.questions || [] });
               }
               break;
             }
@@ -909,7 +726,7 @@ export const Chat: React.FC = () => {
       setTimeout(scrollToBottom, 0);
       setTimeout(scrollToBottom, 100);
     });
-  }, [rows, busy, awaitingReply]);
+  }, [rows, busy]);
 
   // 从 opencode session 同步 agent/model/title 到本地 UI state
   const applySessionToUI = useCallback((session: any) => {
@@ -945,8 +762,6 @@ export const Chat: React.FC = () => {
         setSessionID(sid);
         setRows([]);
         setStatusBySession((prev) => ({ ...prev, [sid]: { type: 'idle' } }));
-        setGenerationStopped(false);
-        setAwaitingReplyBoth(false);
         setError('');
         setCurrentTitle('新会话');
         setShowSessions(false);
@@ -969,29 +784,23 @@ export const Chat: React.FC = () => {
   );
   const currentModelLabel = useMemo(() => {
     if (!selectedModel) return '';
-    return selectedModel.name || selectedModel.id || '';
-  }, [selectedModel]);
+    const name = selectedModel.name || selectedModel.id || '';
+    const provider = providers.find((p: any) => p.id === selectedModel.providerID)?.name
+      || selectedModel.providerName
+      || selectedModel.providerID;
+    return provider ? `${name} · ${provider}` : name;
+  }, [selectedModel, providers]);
 
-  const sendPrompt = useCallback(async (text: string, opts?: {
-    files?: Array<{ name: string; path: string }>;
-    images?: Array<{ name: string; path: string; dataUrl?: string }>;
-    context?: ChatContextItem[];
-  }) => {
+  const sendPrompt = useCallback(async (text: string, opts?: { files?: Array<{ name: string; path: string }>; images?: Array<{ name: string; path: string; dataUrl?: string }> }) => {
     const t = (text || '').trim();
     const images = opts?.images || [];
     const files = opts?.files || [];
-    const ctx = opts?.context || [];
-    // 纯文件/图片/上下文 (无文字) 也允许发送
-    if ((!t && !images.length && !files.length && !ctx.length) || busy || awaitingReplyRef.current || !client) return;
-    setGenerationStopped(false);
-    setAwaitingReplyBoth(true);
-    const sidNow = sessionIDRef.current;
-    if (sidNow) setStatusBySession((prev) => ({ ...prev, [sidNow]: { type: 'busy' } }));
-    promptHistIndex.current = -1;
+    // 纯文件/图片 (无文字) 也允许发送
+    if ((!t && !images.length && !files.length) || busy || !client) return;
     const attachNote = files.length
       ? '\n\n[已上传文件]\n' + files.map((a) => `- ${a.path}`).join('\n')
       : '';
-    const fullText = t + attachNote + formatContextNote(ctx);
+    const fullText = t + attachNote;
     const localId = `local-${Date.now()}`;
     const localParts: any[] = [{ type: 'text', text: fullText }];
     if (images.length) {
@@ -1044,13 +853,12 @@ export const Chat: React.FC = () => {
         ...(model ? { model } : {}),
       });
     } catch (e) {
-      setAwaitingReplyBoth(false);
       setStatusBySession((prev) => ({ ...prev, [sessionIDRef.current]: { type: 'idle' } }));
       setRows((prev) => prev.filter((r) => r.id !== localId));
-      setComposerText(t);
+      setInput(t);
       setApiError(e);
     }
-  }, [busy, sessionID, currentAgent, currentModel, models, client, setApiError, setComposerText]);
+  }, [busy, sessionID, currentAgent, currentModel, models, client, setApiError]);
 
   // 当前会话的生成错误 (session.error 事件渲染用)
   const curSessionError = sessionID ? sessionErrors[sessionID] : undefined;
@@ -1074,40 +882,20 @@ export const Chat: React.FC = () => {
 
   const onSend = useCallback(async () => {
     setError('');
-    setComposerText('');
+    setInput('');
     const imgs = attachments.filter((a) => a.dataUrl);
     const files = attachments.filter((a) => !a.dataUrl);
-    const ctx = contextItems;
     setAttachments([]);
-    setContextItems([]);
-    await sendPrompt(input, { files, images: imgs, context: ctx });
-  }, [input, attachments, contextItems, sendPrompt]);
-
-  const onRetryEmpty = useCallback(() => {
-    const lastUser = [...rows].reverse().find((r) => r.role === 'user');
-    if (!lastUser) return;
-    const text = extractText(lastUser.parts).trim();
-    const images = (lastUser.parts || [])
-      .filter((p: any) => p?.type === 'file' && p.url)
-      .map((p: any) => ({
-        name: String(p.filename || 'image'),
-        path: String(p.filename || ''),
-        dataUrl: String(p.url),
-      }));
-    if (!text && !images.length) return;
-    void sendPrompt(text, { images });
-  }, [rows, sendPrompt]);
+    await sendPrompt(input, { files, images: imgs });
+  }, [input, attachments, sendPrompt]);
 
   const onAbort = useCallback(async (sid?: string) => {
     const target = sid || sessionID;
     if (!target || !client) return;
-    markQuestionCancelled(target);
     try { await client.session.abort({ sessionID: target }); }
     catch (e) { console.warn('[ai] abort:', e); }
     // 乐观复位为 idle; 服务端随后会发真实终态 (若停在 retry 循环上, abort 打断后发 idle)
     setStatusBySession((prev) => ({ ...prev, [target]: { type: 'idle' } }));
-    setAwaitingReplyBoth(false);
-    setGenerationStopped(true);
     setInteractions((prev) => {
       const cur = prev[target];
       if (!cur) return prev;
@@ -1122,38 +910,22 @@ export const Chat: React.FC = () => {
     sessionIDRef.current = sid;
     setShowSessions(false);
     setRows([]);
-    setGenerationStopped(false);
-    setAwaitingReplyBoth(false);
     // 切换后对账 busy (事件流可能有遗漏)
     void refreshSessionStatuses();
     // 切完会话回 input, 继续输入 (双 rAF 避开 React 提交 + Portal 卸载)
     requestAnimationFrame(() => requestAnimationFrame(() => taRef.current?.focus()));
   }, [cleanupDraft, refreshSessionStatuses]);
 
-  const addContext = useCallback((item: ChatContextItem): AddContextResult => {
-    if (item.kind === 'file' && !item.path) return { added: false, reason: 'empty' };
-    if (item.kind === 'selection' && !String(item.text || '').trim()) return { added: false, reason: 'empty' };
-    const key = contextItemKey(item);
-    if (contextItemsRef.current.some((x) => contextItemKey(x) === key)) {
-      showNotice('已在对话中');
-      return { added: false, reason: 'duplicate' };
-    }
-    setContextItems((prev) => [...prev, item]);
-    requestAnimationFrame(() => taRef.current?.focus());
-    return { added: true };
-  }, [showNotice]);
-
-  // 注册 ChatPanelApi (供 PDF / 文件树 / 选区 等外部挂上下文; 卸载注销)
+  // 注册 ChatPanelApi (供 PDF AI讲解等外部调 send 发消息; 卸载注销)
   useEffect(() => {
     registerChatPanelApi({
       newSession: () => { void onNewSession?.(); },
       sessions: () => { /* 历史会话弹窗由内部 UI 管理 */ },
       send: (text) => { void sendPrompt(text); },
       changeSession: (sid) => onSwitchSession(sid),
-      addContext,
     });
     return () => registerChatPanelApi(null);
-  }, [sendPrompt, onSwitchSession, addContext]);
+  }, [sendPrompt, onSwitchSession]);
 
   const onDeleteSession = useCallback(async (sid: string) => {
     if (!client) return;
@@ -1165,7 +937,6 @@ export const Chat: React.FC = () => {
         sessionIDRef.current = '';
         setSessionID('');
         setRows([]);
-        setAwaitingReplyBoth(false);
         void ensureDraft();
       }
     } catch (e) { setApiError(e); }
@@ -1437,27 +1208,43 @@ export const Chat: React.FC = () => {
 
   const applyCommand = useCallback(async (c: { cmd: string; name: string; hint?: string; source: 'client-cmd' }) => {
     setShowCommands(false);
-    setComposerText('');
+    setInput('');
     await runClientCmd(c.cmd);
-  }, [runClientCmd, setComposerText]);
+  }, [runClientCmd]);
+
+  /** 选中 popover item 后, 替换 input + 聚焦 + 光标移到末尾.
+   *  一次写完, 避免 setTimeout 0 在 Portal 点击后失效. */
+  const focusAndMoveCaretToEnd = useCallback((value: string) => {
+    const el = taRef.current;
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    // 下一帧再设光标 (等 React 提交新 value 后)
+    requestAnimationFrame(() => {
+      const len = value.length;
+      try { el.setSelectionRange(len, len); } catch { /* ignore */ }
+    });
+  }, []);
 
   const applyMention = useCallback((m: { id: string; name: string; type: string }) => {
     const trigger = input.match(/[@#]\S*$/)?.[0]?.[0] || '@';
     const replaced = input.replace(/[@#]\S*$/, `${trigger}${m.name} `);
+    setInput(replaced);
     setShowMentions(false);
-    setComposerText(replaced, 'end');
-  }, [input, setComposerText]);
+    focusAndMoveCaretToEnd(replaced);
+  }, [input, focusAndMoveCaretToEnd]);
 
   const onSelectSkill = useCallback((s: { name: string; description?: string; location?: string }) => {
     const replaced = input.replace(/(?:^|\s)\/(\S*)$/, ` #${s.name} `);
+    setInput(replaced);
     setShowSkills(false);
-    setComposerText(replaced, 'end');
-  }, [input, setComposerText]);
+    focusAndMoveCaretToEnd(replaced);
+  }, [input, focusAndMoveCaretToEnd]);
 
   const onReplyQuestion = useCallback(async (sid: string, rid: string, answers: string[][]) => {
     await aiReplyQuestion(sid, rid, answers);
     if (sid) {
       try { await loadMessages(sid); } catch { /* ignore */ }
+      // 已回答: 清 store, 避免 QRecord 重复提示待回答
       clearQuestion(sid);
     }
   }, [loadMessages]);
@@ -1503,47 +1290,10 @@ export const Chat: React.FC = () => {
       if (e.key === 'Tab') { e.preventDefault(); applyMention(mentionList[mentionIndex]); return; }
       if (e.key === 'Escape') { e.preventDefault(); setShowMentions(false); return; }
     }
-    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.altKey && !e.metaKey && !e.ctrlKey && !e.nativeEvent.isComposing) {
-      const el = taRef.current;
-      const list = userPrompts;
-      if (el && list.length) {
-        const edge = caretOnFirstLastLine(el);
-        if (e.key === 'ArrowUp' && edge.first) {
-          let idx = promptHistIndex.current;
-          if (idx < 0) {
-            promptHistDraft.current = {
-              body: readEditorText(el),
-              contextItems: contextItemsRef.current.slice(),
-              attachments: attachmentsRef.current.slice(),
-            };
-            idx = list.length;
-          }
-          const next = idx - 1;
-          if (next >= 0) {
-            e.preventDefault();
-            promptHistIndex.current = next;
-            applyPromptHist(list[next]);
-            return;
-          }
-        }
-        if (e.key === 'ArrowDown' && edge.last && promptHistIndex.current >= 0) {
-          e.preventDefault();
-          const next = promptHistIndex.current + 1;
-          if (next >= list.length) {
-            promptHistIndex.current = -1;
-            applyPromptHist(promptHistDraft.current);
-          } else {
-            promptHistIndex.current = next;
-            applyPromptHist(list[next]);
-          }
-          return;
-        }
-      }
-    }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault(); onSend();
     }
-  }, [onSend, showCommands, showMentions, filteredCommands, mentionList, cmdIndex, mentionIndex, applyCommand, applyMention, userPrompts, applyPromptHist]);
+  }, [onSend, showCommands, showMentions, filteredCommands, mentionList, cmdIndex, mentionIndex, applyCommand, applyMention]);
 
   const onUploadFile = useCallback(async (files: FileList | null) => {
     if (!files || !files.length) return;
@@ -1555,32 +1305,31 @@ export const Chat: React.FC = () => {
     for (const f of Array.from(files)) {
       try {
         const buf = await f.arrayBuffer();
-        const mime = f.type || 'application/octet-stream';
-        const path = chatAttachFilePath(f.name, mime, ts, rnd, idx);
+        // 路径: 原名-时间戳-随机-idx, 避免覆盖 (同名多次上传不盖)
+        const ext = (f.name.match(/\.[a-z0-9]{1,5}$/i)?.[0] || '').toLowerCase();
+        const base = f.name.replace(/\.[a-z0-9]{1,5}$/i, '').replace(/[^\w.\-\u4e00-\u9fa5]/g, '_').slice(0, 60);
+        const safe = base || 'file';
+        const path = `/${safe}-${ts}-${rnd}-${idx}${ext}`;
         idx++;
+        // 上传时显示进度 (service/fs.write 按 4KB 分块回调 onProgress)
         setUploadProgress((p) => ({ ...p, [path]: 0 }));
         await fs.write(path, { base64: bytesToBase64(new Uint8Array(buf)) }, (done, total) => {
           setUploadProgress((p) => ({ ...p, [path]: done / total }));
         });
         setUploadProgress((p) => ({ ...p, [path]: 1 }));
         setTimeout(() => setUploadProgress((p) => { const { [path]: _, ...rest } = p; return rest; }), 1000);
-        added.push({ name: chatAttachLabel(f.name, mime), path });
+        added.push({ name: path.replace(/^\//, ''), path });
       } catch (e) { setError(`上传 ${f.name} 失败: ${String((e as any)?.message || e)}`); }
     }
     if (added.length) setAttachments((prev) => [...prev, ...added]);
   }, [fs]);
 
-  const onPaste = useCallback(async (e: React.ClipboardEvent<HTMLDivElement>) => {
+  const onPaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = Array.from(e.clipboardData?.items || []);
+    // 接任意 kind==='file' (图片/视频/音频/任意文件), 不只图片
+    // 纯文本/代码片段 (kind 不为 file) 走 textarea 默认行为
     const fileItems = items.filter((it) => it.kind === 'file');
-    if (fileItems.length === 0) {
-      const text = e.clipboardData.getData('text/plain');
-      if (text && e.clipboardData.types.includes('text/html')) {
-        e.preventDefault();
-        document.execCommand('insertText', false, text);
-      }
-      return;
-    }
+    if (fileItems.length === 0) return;
     e.preventDefault();
     if (!fs?.write) { setError('沙箱文件系统未就绪'); return; }
     const added: Array<{ name: string; path: string; dataUrl?: string }> = [];
@@ -1592,15 +1341,24 @@ export const Chat: React.FC = () => {
         const f = it.getAsFile();
         if (!f) continue;
         const mime = f.type || 'application/octet-stream';
-        const path = chatAttachFilePath(f.name || 'paste', mime, ts, rnd, idx);
+        // 路径: 原名-时间戳-随机-idx 避免覆盖
+        const ext = (f.name?.match(/\.[a-z0-9]{1,5}$/i)?.[0]
+          || (mime.split('/')[1]?.split(';')[0].replace(/[^\w]/g, '') ? `.${mime.split('/')[1].split(';')[0].replace(/[^\w]/g, '')}` : '')).toLowerCase();
+        const base = (f.name || 'paste')
+          .replace(/\.[a-z0-9]{1,5}$/i, '')
+          .replace(/[^\w.\-\u4e00-\u9fa5]/g, '_')
+          .slice(0, 60) || 'paste';
+        const path = `/${base}-${ts}-${rnd}-${idx}${ext}`;
         idx++;
         const buf = new Uint8Array(await f.arrayBuffer());
+        // 走 PTY shell 写文件 (service/fs.write → FsPty.exec → base64 写), 按 4KB 分块回调进度
         setUploadProgress((p) => ({ ...p, [path]: 0 }));
         await fs.write(path, { base64: bytesToBase64(buf) }, (done, total) => {
           setUploadProgress((p) => ({ ...p, [path]: done / total }));
         });
         setUploadProgress((p) => ({ ...p, [path]: 1 }));
         setTimeout(() => setUploadProgress((p) => { const { [path]: _, ...rest } = p; return rest; }), 1000);
+        // 预览图: 图片类型才生成 dataUrl, 其它只显示图标
         let dataUrl: string | undefined;
         if (mime.startsWith('image/')) {
           dataUrl = await new Promise<string>((resolve, reject) => {
@@ -1610,18 +1368,15 @@ export const Chat: React.FC = () => {
             fr.readAsDataURL(f);
           });
         }
-        added.push({ name: chatAttachLabel(f.name, mime), path, dataUrl });
+        added.push({ name: path.replace(/^\//, ''), path, dataUrl });
       } catch (err) { setError(`粘贴文件失败: ${String((err as any)?.message || err)}`); }
     }
     if (added.length) setAttachments((prev) => [...prev, ...added]);
   }, [fs]);
 
-  const onInput = useCallback((e: React.FormEvent<HTMLDivElement>) => {
-    const val = readEditorText(e.currentTarget);
+  const onInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
     setInput(val);
-    if (promptHistIndex.current >= 0 && val !== userPrompts[promptHistIndex.current]?.body) {
-      promptHistIndex.current = -1;
-    }
     const m = val.match(/(?:^|\s)([\/@#])(\S*)$/);
     if (m) {
       const [, trigger, q] = m;
@@ -1631,7 +1386,10 @@ export const Chat: React.FC = () => {
         setShowMentions(true); setMentionQuery(q || ''); setShowCommands(false); setShowModels(false); setShowAgents(false);
       }
     } else { setShowCommands(false); setShowMentions(false); }
-  }, [userPrompts]);
+    const el = e.target;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 220) + 'px';
+  }, []);
 
   const filteredModels = useMemo(() => {
     const q = modelQuery.trim().toLowerCase();
@@ -1659,31 +1417,21 @@ export const Chat: React.FC = () => {
 
   return (
     <div className="chat">
-      <style>{themeStyles}{styles}</style>
+      <style>{styles}</style>
 
       <header className="chat__topbar">
         <div className="chat__brand">
-          {(() => {
-            // 空状态不展示 logo/标题; 有会话标题时显示品牌 logo + 标题
-            if (!ready || rows.length === 0) return null;
-            if (!sessionID) return null;
-            const t = currentTitle
-              || sessions.find((s: any) => s.id === sessionID)?.title
-              || '';
-            const title = !t || /^New session\b/i.test(t) ? '' : t;
-            if (!title) return null;
-            const empty = getEmptyState();
-            return (
-              <>
-                {empty?.logoUrl ? (
-                  <img className="chat__logo-img" src={empty.logoUrl} alt={empty.name} />
-                ) : empty?.logo ? (
-                  <span className="chat__logo">{empty.logo}</span>
-                ) : null}
-                <span className="chat__brand-name">{title}</span>
-              </>
-            );
-          })()}
+          {getBrand() && <span className="chat__logo">{getBrand()!.logo}</span>}
+          <span className="chat__brand-name">{
+            (() => {
+              if (!ready) return 'AI 助手';
+              if (!sessionID) return '新会话';
+              const t = currentTitle
+                || sessions.find((s: any) => s.id === sessionID)?.title
+                || '';
+              return !t || /^New session\b/i.test(t) ? '新会话' : t;
+            })()
+          }</span>
         </div>
         {ready && (
           <div className="chat__top-actions">
@@ -1738,20 +1486,20 @@ export const Chat: React.FC = () => {
           >
             <div className="chat__preview" role="dialog" aria-modal="true">
               <div className="chat__preview-head">
-                <span className="chat__preview-name">{previewAttachment.dataUrl ? '图片' : previewAttachment.name}</span>
+                <span className="chat__preview-name">{previewAttachment.name}</span>
                 <button type="button" className="chat__modal-back" title="关闭" onClick={() => setPreviewAttachment(null)}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
                 </button>
               </div>
               <div className="chat__preview-body">
                 {previewAttachment.dataUrl ? (
-                  <img src={previewAttachment.dataUrl} alt="图片" />
+                  <img src={previewAttachment.dataUrl} alt={previewAttachment.name} />
                 ) : (
                   <div className="chat__preview-file">
                     <span className="chat__attach-ic chat__attach-ic--lg">
                       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                     </span>
-                    <span className="chat__preview-path">{previewAttachment.name}</span>
+                    <span className="chat__preview-path">{previewAttachment.path}</span>
                   </div>
                 )}
               </div>
@@ -1768,36 +1516,20 @@ export const Chat: React.FC = () => {
             onPick={(prompt) => { void sendPrompt(prompt); }}
           />
         ) : (
-          rows.map((r, i) => {
-            if (isHiddenEmptyHistoricalAssistant(rows, i)) return null;
-            const turnEnd = isAssistantTurnEnd(rows, i);
-            const showStats = turnEnd && !(busy && i === rows.length - 1);
-            const emptyTurn = turnEnd && !busy && !awaitingReply && !assistantTurnHasVisibleContent(rows, i);
-            const latest = r.id === rows[rows.length - 1]?.id;
-            const emptyKind = !emptyTurn
-              ? undefined
-              : (generationStopped && latest ? 'stopped' : 'empty');
-            return (
-              <MessageRow
-                key={r.id}
-                row={r}
-                streaming={(busy || awaitingReply) && r.role === 'assistant' && latest}
-                done={!busy}
-                latest={latest}
-                sessionID={sessionID}
-                onReplyQuestion={onReplyQuestion}
-                onAbortSession={onAbort}
-                showStats={showStats}
-                turnStats={showStats ? collectTurnStats(rows, i) : null}
-                emptyKind={emptyKind}
-                onRetryEmpty={emptyKind === 'empty' && latest ? onRetryEmpty : undefined}
-              />
-            );
-          })
+          rows.map((r) => (
+            // 打字机动画只在真正流式输出时开; retry 退避等待期不假装在出字
+            <MessageRow
+              key={r.id}
+              row={r}
+              streaming={curStatus?.type === 'busy' && r.role === 'assistant' && r.id === rows[rows.length - 1]?.id}
+              done={!busy}
+              sessionID={sessionID}
+              onReplyQuestion={onReplyQuestion}
+              onAbortSession={onAbort}
+              busy={busy}
+            />
+          ))
         )}
-        {rows[rows.length - 1]?.role === 'user' && (awaitingReply || busy) && !generationStopped ? (
-          <PendingReply />
-        ) : null}
       </div>
 
       {error && (
@@ -1932,7 +1664,7 @@ export const Chat: React.FC = () => {
             </div>
           )}
 
-          <div className={`chat__input-wrap${attachments.length || contextItems.length ? ' has-chips' : ''}`}
+          <div className="chat__input-wrap"
             onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
             onDrop={(e) => {
               e.preventDefault();
@@ -1940,107 +1672,53 @@ export const Chat: React.FC = () => {
               if (files && files.length) void onUploadFile(files);
             }}
           >
-            <div
-              className="chat__input-body"
-              onClick={(e) => {
-                if (e.target === e.currentTarget) taRef.current?.focus();
-              }}
-            >
-              {(contextItems.length > 0 || attachments.length > 0) && (
-                <div className="chat__input-chips">
-              {contextItems.map((c) => {
-                const range = c.kind === 'selection' && typeof c.startLine === 'number'
-                  ? `${c.startLine}${typeof c.endLine === 'number' && c.endLine !== c.startLine ? `-${c.endLine}` : ''}`
-                  : '';
-                const label = range ? c.name.replace(/:\d+(-\d+)?$/, '') : c.name;
-                return (
+            <textarea
+              ref={taRef}
+              className="chat__input"
+              value={input}
+              onChange={onInput}
+              onKeyDown={onKeyDown}
+              onPaste={onPaste}
+              placeholder="输入/ 可以召唤魔法; 输入@ 可以选择智能体 🎉"
+              rows={1}
+            />
+            {attachments.length > 0 && (
+              <div className="chat__attach">
+                {attachments.map((a, i) => (
                   <button
-                    key={contextItemKey(c)}
+                    key={i}
                     type="button"
-                    className="chat__ctx-chip"
-                    title={c.kind === 'file' ? c.path : c.text.slice(0, 200)}
+                    className={`chat__attach-card${uploadProgress[a.path] !== undefined && uploadProgress[a.path] < 1 ? ' is-uploading' : ''}`}
+                    onClick={() => setPreviewAttachment(a)}
+                    title={uploadProgress[a.path] !== undefined && uploadProgress[a.path] < 1
+                      ? `上传中 ${Math.round((uploadProgress[a.path] || 0) * 100)}%`
+                      : '点击查看'}
                   >
-                    <span className="chat__ctx-chip-ic" aria-hidden>
-                      {c.kind === 'file' ? (
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                      ) : c.source === 'terminal' ? (
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-                      ) : (
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                      )}
-                    </span>
-                    <span className="chat__ctx-chip-name">{label}</span>
-                    {range ? <span className="chat__ctx-chip-range">{range}</span> : null}
+                    {a.dataUrl ? (
+                      <img className="chat__attach-thumb" src={a.dataUrl} alt={a.name} />
+                    ) : (
+                      <span className="chat__attach-ic">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                      </span>
+                    )}
+                    <span className="chat__attach-name">{a.name}</span>
+                    {uploadProgress[a.path] !== undefined && uploadProgress[a.path] < 1 && (
+                      <span className="chat__attach-progress" title={`上传中 ${Math.round(uploadProgress[a.path] * 100)}%`}>
+                        <span className="chat__attach-progress-bar" style={{ width: `${Math.round(uploadProgress[a.path] * 100)}%` }} />
+                      </span>
+                    )}
                     <span
                       role="button"
                       tabIndex={0}
-                      className="chat__ctx-chip-x"
+                      className="chat__attach-x"
                       title="移除"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const key = contextItemKey(c);
-                        setContextItems((prev) => prev.filter((x) => contextItemKey(x) !== key));
-                        taRef.current?.focus();
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.stopPropagation();
-                          const key = contextItemKey(c);
-                          setContextItems((prev) => prev.filter((x) => contextItemKey(x) !== key));
-                          taRef.current?.focus();
-                        }
-                      }}
+                      onClick={(e) => { e.stopPropagation(); setAttachments((prev) => prev.filter((_, j) => j !== i)); }}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); setAttachments((prev) => prev.filter((_, j) => j !== i)); } }}
                     >×</span>
                   </button>
-                );
-              })}
-              {attachments.map((a, i) => (
-                <button
-                  key={`att-${i}`}
-                  type="button"
-                  className={`chat__ctx-chip${uploadProgress[a.path] !== undefined && uploadProgress[a.path] < 1 ? ' is-uploading' : ''}`}
-                  onClick={() => setPreviewAttachment(a)}
-                  title={uploadProgress[a.path] !== undefined && uploadProgress[a.path] < 1
-                    ? `上传中 ${Math.round((uploadProgress[a.path] || 0) * 100)}%`
-                    : a.name}
-                >
-                  {a.dataUrl ? (
-                    <img className="chat__ctx-chip-thumb" src={a.dataUrl} alt="" />
-                  ) : (
-                    <span className="chat__ctx-chip-ic" aria-hidden>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                    </span>
-                  )}
-                  {!a.dataUrl && <span className="chat__ctx-chip-name">{a.name}</span>}
-                  {uploadProgress[a.path] !== undefined && uploadProgress[a.path] < 1 && (
-                    <span className="chat__attach-progress" title={`上传中 ${Math.round(uploadProgress[a.path] * 100)}%`}>
-                      <span className="chat__attach-progress-bar" style={{ width: `${Math.round(uploadProgress[a.path] * 100)}%` }} />
-                    </span>
-                  )}
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    className="chat__ctx-chip-x"
-                    title="移除"
-                    onClick={(e) => { e.stopPropagation(); setAttachments((prev) => prev.filter((_, j) => j !== i)); taRef.current?.focus(); }}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); setAttachments((prev) => prev.filter((_, j) => j !== i)); taRef.current?.focus(); } }}
-                  >×</span>
-                </button>
-              ))}
-                </div>
-              )}
-              <div
-                ref={taRef}
-                className={`chat__input${!input ? ' is-empty' : ''}`}
-                contentEditable="plaintext-only"
-                role="textbox"
-                aria-multiline="true"
-                data-placeholder="输入指令，让专家帮你分析..."
-                onInput={onInput}
-                onKeyDown={onKeyDown}
-                onPaste={onPaste}
-              />
-            </div>
+                ))}
+              </div>
+            )}
             <div className="chat__input-bar">
               {/* 上传附件: 用 File System Access API (localhost 支持) 绕开 CodeBlitz 对原生 file chooser 的拦截 */}
               {workspace && (
@@ -2198,19 +1876,6 @@ export const Chat: React.FC = () => {
 
               <div className="chat__bar-spacer" />
 
-              {/* 工作空间: 发送按钮左侧；__APP_CONFIG__.showWorkspacePicker 默认 false */}
-              {showWorkspacePicker && (
-                <button
-                  type="button"
-                  className="chat__bar-btn chat__bar-text"
-                  title={workspace || '点击选择工作空间'}
-                  onClick={() => requestShowPicker()}
-                >
-                  <span>{cwdName}</span>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-                </button>
-              )}
-
               {busy ? (
                 <button type="button" className="chat__send chat__send--stop" onClick={() => onAbort()} title="停止">
                   <span className="chat__stop-square" />
@@ -2229,12 +1894,8 @@ export const Chat: React.FC = () => {
                   type="button"
                   className="chat__send"
                   onClick={onSend}
-                  disabled={awaitingReply || (!input.trim() && attachments.length === 0 && contextItems.length === 0)}
-                  title={
-                    !input.trim() && (attachments.length || contextItems.length)
-                      ? `发送 ${attachments.length + contextItems.length} 项上下文`
-                      : '发送 (Enter)'
-                  }
+                  disabled={!input.trim() && attachments.length === 0}
+                  title={attachments.length && !input.trim() ? `发送 ${attachments.length} 个附件` : '发送 (Enter)'}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
                 </button>
