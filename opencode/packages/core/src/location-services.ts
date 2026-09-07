@@ -83,12 +83,17 @@ export type LocationError = LayerNode.Error<typeof locationServices>
 
 export function buildLocationServiceMap(
   replacements: LayerNode.Replacements = [],
+  // numas: workspace 路径是 symlink 时, 给每个 ref 提供 logicalDirectory 用于 watcher
+  // 把 parcel 的 real path 事件还原成 logical 路径 (见 Location.BoundOptions).
+  resolveLogicalDirectory: (ref: Location.Ref) => string | undefined = () => undefined,
 ): Layer.Layer<LocationServiceMap.Service> {
   return Layer.effect(
     LocationServiceMap.Service,
     LayerMap.make(
       (ref: Location.Ref) => {
-        const allReplacements = replacements.concat([[Location.node, Location.boundNode(ref)]])
+        const allReplacements = replacements.concat([
+          [Location.node, Location.boundNode(ref, { logicalDirectory: resolveLogicalDirectory(ref) })],
+        ])
         // Apply replacements during hoist, not afterward: replacements can
         // introduce new tagged dependencies (Location.boundNode depends on
         // Project), and the hoist walk is the only pass that can still slice

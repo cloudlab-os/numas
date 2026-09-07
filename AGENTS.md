@@ -9,6 +9,24 @@
 
 ## 1. 用户与 AI 协作规范
 
+### 1.0 标准开发流程 (编排与强约束)
+
+> **AI 必须严格按以下 11 步推进, 每一步未到下界不进入下一步, 不允许跳步或合并**:
+
+1. **用户提需求** — 用户输入明确任务
+2. **双方讨论分析** — AI 调研 (搜代码/读文档/最小复现), 把事实摆出来, 不输出方案
+3. **`question` 反馈建议或推荐方案** — AI 用 `question` 工具列出 2-4 个候选方案 + 推荐项, 含场景/取舍/影响面
+4. **用户决策或反问** — 用户选 / 改 / 反问 → AI 补充事实回到步骤 2 或 3 → 直到**用户明确决策完成**才进入步骤 5
+5. **执行开发** — 按用户决策改代码; 过程中若发现新歧义/不可逆风险 → 回到步骤 3 重确认
+6. **按要求本地或部署容器验证** — 跑测试/构建镜像/起容器/抓真实流量, 不只"我觉得写对了"
+7. **测试验收通过** — 跑通预期路径 + 边界 + 错误/降级 (按 §4.1 验收标准模板); 用户拍板"通过"才进步骤 8
+8. **总结沉淀积累** — 本次踩坑/模式/隐式偏好 → 补 §4 避坑/实践 + 必要时 §3.2 长期偏好 (按 §3.1 自查铁律, 不依赖用户催)
+9. **`question` 询问是否 git 提交推送** — 列选项: 提交+双远程 / 仅提交 / 暂存 / 不 git; 用户拍板后执行; **任何上一轮的 git 认可仅单次有效, 下轮重新问** (AGENTS.md §1.4)
+10. **等待新需求** — 流程闭环, AI 不主动开新题
+11. **异常分支**: 任何步骤发现违背 §1/§2 铁律 (含用户临时要求 AI 越权做不可逆动作) → AI 必须用 `question` 提醒并等用户拍板, 不沉默执行
+
+> **反例**: ① AI 自行拍板方案直接动手 (跳过步骤 3-4); ② 改完代码就用一句"我准备提交"代替 question (跳过步骤 9, 违反 §1.4); ③ 用户在 §1.4 之外说"OK 就提交吧"AI 也照样 git add/commit (未真正走步骤 9 选项); ④ 改完不沉淀 (违反 §3.1).
+
 ### 1.1 责任分工
 
 - **用户对结果负责**, AI 辅助完成开发/测试/问题处理等工作.
@@ -451,3 +469,26 @@ AI **仍需 `question`**:
 - **问题描述**: 一轮改动/文档产出完成后, AI 在正文写 "按约定询问 git 操作意向:" 或 "我准备提交, 你 OK 吗?" 就停下, **没有真正调用 `question` 工具**. 这不是可点选的决策弹窗, 用户没法拍板, 违反 §1.4 "改动必反馈".
 - **复现路径**: 写完文档/改完代码, 习惯性用一句话收尾代替工具调用; 或用 `question` 问了别的技术问题, 却把 git 选项塞在普通正文里.
 - **解决方案**: 收尾**必须显式调用 `question` 工具**, `questions[].options` 里放 git 操作选项 (提交+推送双远程 / 仅提交 / 暂存 / 不操作, 首个推荐项标 "(推荐)"), 等用户点选返回后再执行. 判据: 自查这一轮**有没有发出 `question` 工具调用** — 只输出文字、无工具调用 = 违规. 文档/调研类无代码改动同样适用 (是否提交文档也是 git 决策). 见 §1.4 铁律.
+
+#### 24. workspace 根是 symlink 时 fs.watcher 事件路径 real vs logical 不匹配 → 客户端静默丢弃
+
+- **问题描述**: workspace URL/header 给 logical 路径 (`/home/community/222`, symlink → `/app/222`). `InstanceStore.load` 调 `FSUtil.resolve` realpath, 后续 `Location.Service.directory` / watcher 订阅路径 / `event.location.directory` 全部走 real path. Watcher 触发时 `@parcel/watcher` 给的 `update.path` 也是 real path (即使订阅时用 symlink path, parcel 内部归一化). 客户端 `/api/fs/list` 按 AGENTS.md #21 修复后走 logical 路径 (`filesystem.ts:resolve` 用 `path.resolve` 不 realpath), 文件树里是 `/home/community/222/2.txt`. SSE 推到客户端的事件里 `file: "/app/222/2.txt"` (real) — `invalidateFromWatcher` → `ops.hasFile(real)` false → **事件被静默丢弃**, UI 不更新. 用户感受是 "opencode 没发事件 到 /global/event" (网络层事件**有**上行, 只是客户端无 UI 动作).
+- **复现路径**: workspace 是 symlink (`/home/community/222 -> /app/222`), `touch /home/community/222/2.txt` 后浏览器 Network 看 `/global/event` SSE 流 — 能看到 `type:"file.watcher.updated"` 事件, 但 `properties.file` 是 `/app/222/2.txt` (real), 客户端文件树匹配失败.
+- **解决方案 (用户拍板「watcher callback 内 real→logical 转换」)**: 不能让客户端做反向解析 (违反分层架构铁律, 跨平台不一致). 核心思路: InstanceStore.load 同步建立 `real → logical` 映射 (real = `FSUtil.resolve(input)`, logical = `path.resolve(FSUtil.windowsPath(input))`), boundNode 通过 resolver 拿到 logical 注入 `Location.Service.logicalDirectory`, watcher callback 在 publish 前用 `path.relative(real, file)` 检测子树关系, 在内则替换 prefix 为 logical. 关键决策点:
+  - 不动 schema (`Location.Ref` 在 `protocol/groups/{event,session,location}` 出现, 加 optional 字段会污染 wire, SDK regen 联级), 走 side-channel (`LogicalDirectoryRegistry` 进程级 Map, 不进 layer 依赖图).
+  - 不在 watcher 订阅路径做文章 — parcel 订阅 symlink path 也归一化为 real path 触发, 事件 path 永远 real. 转换只能发生在 callback.
+  - 不要在 `InstanceStore.load` 改用 logical (cache key 会变成 logical, 副作用: 同一物理目录经不同 symlink 访问变成不同 instance, 跨模块影响面广).
+  - 转换函数 `logicalToRealPath(file, realRoot, logicalRoot)` 必须用 `path.relative + startsWith("..")` 检测, 避免字符串前缀误匹配 (`/app/222` vs `/app/222x`). 文件不在 workspace 子树内 (`relative` 越界或 absolute) 必须**原样返回**, 不替用户改前缀.
+- **落实位置**:
+  - `packages/opencode/src/project/logical-directory-registry.ts` (新增) — 进程级 `Map<string,string>`, `set/get/delete/clear` 4 API, `set` 内做 `real !== logical` 判空避免冗余 entry.
+  - `packages/opencode/src/project/instance-store.ts` — `load`/`reload` 各加 `logicalDirectory = path.resolve(FSUtil.windowsPath(input.directory))` 一行, `LogicalDirectoryRegistry.set(directory, logicalDirectory)`; `disposeDirectory` 加 `delete` 清理.
+  - `packages/core/src/location.ts` — `BoundOptions { logicalDirectory?: string }` 入参, `Interface` 加 `readonly logicalDirectory?: string` (runtime, 非 schema); `layer(ref, options?)` / `boundNode(ref, options?)` 透传.
+  - `packages/core/src/location-services.ts` — `buildLocationServiceMap(replacements?, resolveLogicalDirectory?)` 第二参为 `(ref: Ref) => string | undefined`.
+  - `packages/opencode/src/server/routes/instance/httpapi/server.ts` — `createRoutes` 内 `buildLocationServiceMap([], (ref) => LogicalDirectoryRegistry.get(ref.directory))` 注入.
+  - `packages/core/src/filesystem/watcher.ts` — callback 内 `const file = logicalToRealPath(update.path, location.directory, location.logicalDirectory)` 后 publish; helper 放在 `protecteds` 之后, 注释写明相对路径检测原理.
+  - `packages/core/test/filesystem/watcher.test.ts` — `provide(directory, vcs?, logicalDirectory?)` 加参; `withTmp` options 加 `logicalDirectory?: (realDirectory) => string` resolver, 通过 `init: async (d) => { await fs.rename(d, actual); await fs.symlink(actual, d) }` 把 tmpdir 重命名后挂 symlink; 加 `describeSymlink("symlinked workspace root")` 测试块, 写 `via-symlink.txt` 经 logicalDirectory 路径, 期望事件 `file` 是 logical 路径而非 real.
+- **排查方法**:
+  1. **区分「list 显示」vs「watcher 事件」**: list 已走 logical (AGENTS.md #21) 不代表事件也走 logical; 先 curl `GET /api/fs/list?path=<logical>` 看返回路径是 `/home/community/222/2.txt` (logical), 再 curl `GET /global/event?directory=<logical>` (SSE) 看事件 `properties.file` — 两者 prefix 不一致即确诊.
+  2. **「订阅 symlink path 也会归一化」的真相**: 单独跑 `@parcel/watcher` (sumi node_modules 已有) 写最小复现, 订阅 real / symlink / nested symlink, file path 无论订阅哪种都是 real. macOS fs-events、Linux inotify、Win ReadDirectoryChangesW 均归一化. 不要尝试"订阅 logical 让 parcel 给 logical path" — 无效.
+  3. **`path.relative` 边界检测 vs `startsWith`**: `/app/222` 与 `/app/222x` 用 `startsWith` 都匹配, 用 `path.relative('/app/222', '/app/222x/foo')` 得 `../222x/foo` (越界), 检测越界必须 `relative.startsWith('..') || path.isAbsolute(relative) || relative === ''` 三选一 (relative=='' 时 file 就是 root 自身, 不需要替换 prefix).
+  4. **logicalToRealPath 不该改 workspace 外路径**: 即便上游误传一个不在 realRoot 子树内的 path (e.g. 另一个 instance 的事件因 SSE 没过滤混入), 必须返回原值, 让上层 LocationServiceMap / VCS 等的 directory equality check (`event.location.directory !== ctx.directory`) 自行过滤, 不要替上游做语义判断.

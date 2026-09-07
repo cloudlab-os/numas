@@ -117,12 +117,30 @@ export const FileSystemHandler = HttpApiBuilder.group(Api, "server.fs", (handler
         Effect.gen(function* () {
           const fs = yield* FSUtil.Service
           const location = yield* Location.Service
+          // numas: workspace 路径是 symlink 时 (e.g. /home/community/222 -> /app/222),
+          // location.directory 是 logical path. parcel/watcher 订阅 logical (symlink)
+          // 在 Linux 上 inotify_add_watch 报 "Not a directory" 失败, 整个 fs.watch
+          // 流不工作, 客户端 explorer 收不到更新. 必须用 real path 订阅.
           const rootReal = yield* fs.realPath(location.directory).pipe(Effect.orElseSucceed(() => location.directory))
           const subpath = ctx.query.path
-          const watchRoot = subpath ? path.resolve(location.directory, FSUtil.windowsPath(subpath)) : location.directory
+          // numas: subpath 也要基于 rootReal 解析, 防止 location.directory 是 symlink 时
+          // path.resolve(logical, subpath) 落到错的物理路径.
+          const watchRoot = subpath ? path.resolve(rootReal, FSUtil.windowsPath(subpath)) : rootReal
           const filterRootReal = subpath
             ? yield* fs.realPath(watchRoot).pipe(Effect.orElseSucceed(() => watchRoot))
             : rootReal
+          // numas: 客户端 file tree 是 logical 路径 (filesystem.ts:resolve 走 logical,
+          // AGENTS.md #21). 用 real 做 base 算出的 rel 是 real-relative (e.g.
+          // "symlink-test-real/new.txt") 而客户端 tree 显示的是 logical (e.g.
+          // "symlink-test/new.txt"), fire 给 codeblitz 后 explorer 不刷新. 用 logical
+          // 做 base 算 rel, 让 path 与客户端 tree 一致. 没 logical 时 fallback 到 real,
+          // 行为与之前一样.
+          const filterRootLogical =
+            location.logicalDirectory && location.logicalDirectory !== location.directory
+              ? subpath
+                ? path.resolve(location.logicalDirectory, FSUtil.windowsPath(subpath))
+                : location.logicalDirectory
+              : filterRootReal
 
           const out = yield* Queue.unbounded<{
             readonly path: string
@@ -139,7 +157,20 @@ export const FileSystemHandler = HttpApiBuilder.group(Api, "server.fs", (handler
               for (const u of updates) {
                 const t: "add" | "change" | "unlink" =
                   u.type === "create" ? "add" : u.type === "delete" ? "unlink" : "change"
-                const rel = path.relative(filterRootReal, u.path)
+                // numas: 用 logical base 算 rel, 客户端 tree 是 logical 路径; 非 symlink
+                // workspace 时 filterRootLogical === filterRootReal, 行为不变.
+                const rel = path.relative(filterRootLogical, u.path)
+                // numas debug: 关键诊断 — rel 应该是 logical-relative 才能匹配客户端 tree
+                Effect.runSync(
+                  Effect.logInfo("[numas debug] fs.watch", {
+                    watchRoot,
+                    filterRootReal,
+                    filterRootLogical,
+                    updatePath: u.path,
+                    rel,
+                    skip: rel.startsWith("..") || path.isAbsolute(rel),
+                  }),
+                )
                 if (rel.startsWith("..") || path.isAbsolute(rel)) continue
                 Effect.runSync(
                   Effect.gen(function* () {

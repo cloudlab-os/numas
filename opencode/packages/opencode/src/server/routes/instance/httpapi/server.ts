@@ -105,6 +105,7 @@ import { tuiHandlers } from "./handlers/tui"
 import { handlers } from "@opencode-ai/server/handlers"
 import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
 import { layer as locationLayer } from "@opencode-ai/server/location"
+import { LogicalDirectoryRegistry } from "@/project/logical-directory-registry"
 import { sessionLocationLayer } from "@opencode-ai/server/middleware/session-location"
 import { PtyEnvironment } from "@opencode-ai/server/pty-environment"
 import { schemaErrorLayer as v2SchemaErrorLayer } from "@opencode-ai/server/middleware/schema-error"
@@ -286,7 +287,10 @@ export function createRoutes(
   registry?: string,
   extensionsDir?: string,
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
-  const locationServiceMapV2 = buildLocationServiceMap()
+  const locationServiceMapV2 = buildLocationServiceMap(
+    [],
+    (ref) => LogicalDirectoryRegistry.get(ref.directory),
+  )
 
   return Layer.mergeAll(
     rootApiRoutes,

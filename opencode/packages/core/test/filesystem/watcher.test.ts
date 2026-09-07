@@ -1,6 +1,7 @@
 import { $ } from "bun"
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
+import { rm } from "fs/promises"
 import path from "path"
 import { ConfigProvider, Deferred, Duration, Effect, Fiber, Layer, Option, Stream } from "effect"
 import { Config } from "@opencode-ai/core/config"
@@ -35,10 +36,12 @@ const flagsLayer = ConfigProvider.layer(
   }),
 )
 
-function provide(directory: string, vcs?: Location.Interface["vcs"]) {
+function provide(directory: string, vcs?: Location.Interface["vcs"], logicalDirectory?: string) {
   const locationLayer = Layer.succeed(
     Location.Service,
-    Location.Service.of(location({ directory: AbsolutePath.make(directory) }, { vcs })),
+    Location.Service.of(
+      location({ directory: AbsolutePath.make(directory) }, { vcs, ...(logicalDirectory ? { logicalDirectory } : {}) }),
+    ),
   )
   return Effect.provide(
     AppNodeBuilder.build(Watcher.node, [
@@ -49,13 +52,17 @@ function provide(directory: string, vcs?: Location.Interface["vcs"]) {
 }
 
 function withTmp<A, E, R>(
-  f: (directory: string, vcs?: Location.Interface["vcs"]) => Effect.Effect<A, E, R>,
-  options?: { git?: boolean; init?: (directory: string) => Promise<void> },
+  f: (directory: string, vcs?: Location.Interface["vcs"], logicalDirectory?: string) => Effect.Effect<A, E, R>,
+  options?: {
+    git?: boolean
+    init?: (directory: string) => Promise<void>
+    logicalDirectory?: (realDirectory: string) => string
+  },
 ) {
   return Effect.acquireRelease(
     Effect.promise(async () => {
       const tmp = await tmpdir()
-      if (!options?.git) return { tmp, vcs: undefined }
+      if (!options?.git) return { tmp, vcs: undefined, logicalDirectory: options?.logicalDirectory?.(tmp.path) }
       await $`git init`.cwd(tmp.path).quiet()
       await $`git config core.fsmonitor false`.cwd(tmp.path).quiet()
       await $`git config commit.gpgsign false`.cwd(tmp.path).quiet()
@@ -63,10 +70,18 @@ function withTmp<A, E, R>(
       await $`git config user.name Test`.cwd(tmp.path).quiet()
       await $`git commit --allow-empty -m root`.cwd(tmp.path).quiet()
       await options.init?.(tmp.path)
-      return { tmp, vcs: { type: "git" as const, store: AbsolutePath.make(path.join(tmp.path, ".git")) } }
+      return {
+        tmp,
+        vcs: { type: "git" as const, store: AbsolutePath.make(path.join(tmp.path, ".git")) },
+        logicalDirectory: options?.logicalDirectory?.(tmp.path),
+      }
     }),
     ({ tmp }) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-  ).pipe(Effect.flatMap(({ tmp, vcs }) => f(tmp.path, vcs).pipe(provide(tmp.path, vcs))))
+  ).pipe(
+    Effect.flatMap(({ tmp, vcs, logicalDirectory }) =>
+      f(tmp.path, vcs, logicalDirectory).pipe(provide(tmp.path, vcs, logicalDirectory)),
+    ),
+  )
 }
 
 function wait(check: (event: WatcherEvent) => boolean) {
@@ -259,6 +274,41 @@ describeWatcher("Watcher", () => {
             await fs.rename(path.join(directory, ".git"), actual)
             await fs.symlink(actual, path.join(directory, ".git"))
           },
+        },
+      ),
+    )
+  })
+
+  // numas: workspace 根目录是 symlink 时, watcher 订阅的 real path 与用户输入的 logical
+  // path 不一致, parcel 给的事件 path 是 real path. watcher callback 需要把 real prefix
+  // 替换回 logical prefix, 让客户端逻辑路径文件树能匹配 (filesystem.ts:resolve 走
+  // logical, AGENTS.md #21 修复约定).
+  describeSymlink("symlinked workspace root", () => {
+    it.live("publishes events with logical path when workspace is symlinked", () =>
+      withTmp(
+        (_directory, _vcs, logicalDirectory) =>
+          Effect.gen(function* () {
+            const fs = yield* FSUtil.Service
+            // logicalDirectory 是 symlink, _directory 是其 realpath. watcher 订阅 _directory (real),
+            // 写入经 logicalDirectory, 事件 file 应还原成 logical path.
+            yield* ready(_directory)
+            const target = path.join(logicalDirectory!, "via-symlink.txt")
+            yield* Effect.addFinalizer(() => Effect.promise(() => rm(target, { force: true }).catch(() => {})))
+            expect(
+              yield* nextUpdate(
+                (event) => event.file === target,
+                fs.writeFileString(target, "hello"),
+              ),
+            ).toEqual({ file: target, event: "add" })
+          }),
+        {
+          init: async (directory) => {
+            // 把 tmpdir 挪到 sibling 当 real 目录, 原位置换成 symlink (logical).
+            const actual = path.join(directory, "..", `actual_${path.basename(directory)}`)
+            await fs.rename(directory, actual)
+            await fs.symlink(actual, directory)
+          },
+          logicalDirectory: (realDirectory) => realDirectory,
         },
       ),
     )

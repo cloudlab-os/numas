@@ -48,6 +48,18 @@ function protecteds(dir: string) {
   })
 }
 
+// numas: 把 parcel 给的 real path 事件还原成 logical path. 当且仅当:
+//   1) 订阅路径 (realRoot) 与 logicalRoot 不相等 (workspace 是 symlink)
+//   2) update.path 在 realRoot 子树内 (避免误改 workspace 外的同名前缀)
+// 才替换前缀. 否则原样返回 (无 symlink / 路径在 workspace 外).
+// 用 path.relative + startsWith("..") 检测, 避免字符串前缀误匹配 (e.g. /app/222 vs /app/222x).
+function logicalToRealPath(file: string, realRoot: string, logicalRoot?: string): string {
+  if (!logicalRoot || logicalRoot === realRoot) return file
+  const relative = path.relative(realRoot, file)
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return file
+  return path.join(logicalRoot, relative)
+}
+
 export const hasNativeBinding = () => !!watcher()
 
 export function subscribe(
@@ -86,7 +98,7 @@ const layer = Layer.effect(
     const w = watcher()
     if (!w) return Service.of({})
 
-    yield* Effect.logInfo("watcher backend", { directory: location.directory, platform: process.platform, backend })
+    yield* Effect.logInfo("watcher backend", { directory: location.directory, logicalDirectory: location.logicalDirectory, platform: process.platform, backend })
     const events = yield* EventV2.Service
     const fs = yield* FSUtil.Service
     const git = yield* Git.Service
@@ -99,9 +111,15 @@ const layer = Layer.effect(
 
     const callback: ParcelWatcher.SubscribeCallback = (_error, updates) => {
       for (const update of updates) {
-        if (update.type === "create") runFork(events.publish(Event.Updated, { file: update.path, event: "add" }))
-        if (update.type === "update") runFork(events.publish(Event.Updated, { file: update.path, event: "change" }))
-        if (update.type === "delete") runFork(events.publish(Event.Updated, { file: update.path, event: "unlink" }))
+        // numas: workspace 是 symlink 时, FSUtil.resolve 把 logical (/home/community/222)
+        // 转成 real (/app/222), watcher 订阅 real, parcel 内部归一化使 update.path
+        // 也是 real. 但客户端 /api/fs/list 返回 logical 路径 (filesystem.ts:resolve 走
+        // logical, AGENTS.md #21), real path 事件无法匹配 → UI 不更新.
+        // 这里把 real prefix 替换回 logical prefix, 让事件路径与文件树一致.
+        const file = logicalToRealPath(update.path, location.directory, location.logicalDirectory)
+        if (update.type === "create") runFork(events.publish(Event.Updated, { file, event: "add" }))
+        if (update.type === "update") runFork(events.publish(Event.Updated, { file, event: "change" }))
+        if (update.type === "delete") runFork(events.publish(Event.Updated, { file, event: "unlink" }))
       }
     }
 

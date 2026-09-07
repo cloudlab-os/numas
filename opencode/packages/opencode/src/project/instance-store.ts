@@ -6,10 +6,12 @@ import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { InstanceRef } from "@/effect/instance-ref"
 import { disposeInstance as runDisposers } from "@/effect/instance-registry"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import path from "node:path"
 import { Context, Deferred, Duration, Effect, Exit, Layer, Scope } from "effect"
 import { type InstanceContext } from "./instance-context"
 import { InstanceBootstrap } from "./bootstrap-service"
 import * as Project from "./project"
+import { LogicalDirectoryRegistry } from "./logical-directory-registry"
 
 export interface LoadInput {
   directory: string
@@ -123,6 +125,8 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
 
     const load = (input: LoadInput): Effect.Effect<InstanceContext> => {
       const directory = FSUtil.resolve(input.directory)
+      const logicalDirectory = path.resolve(FSUtil.windowsPath(input.directory))
+      LogicalDirectoryRegistry.set(directory, logicalDirectory)
       return Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const existing = cache.get(directory)
@@ -141,6 +145,8 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
 
     const reload = (input: LoadInput): Effect.Effect<InstanceContext> => {
       const directory = FSUtil.resolve(input.directory)
+      const logicalDirectory = path.resolve(FSUtil.windowsPath(input.directory))
+      LogicalDirectoryRegistry.set(directory, logicalDirectory)
       return Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const previous = cache.get(directory)
@@ -177,6 +183,7 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
       const exit = yield* Deferred.await(entry.deferred).pipe(Effect.exit)
       if (Exit.isFailure(exit)) return yield* removeEntry(directory, entry).pipe(Effect.asVoid)
       yield* disposeEntry(directory, entry, exit.value).pipe(Effect.asVoid)
+      LogicalDirectoryRegistry.delete(directory)
     })
 
     const disposeAllOnce = Effect.fnUntraced(function* () {
