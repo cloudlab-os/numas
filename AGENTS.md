@@ -44,6 +44,12 @@
 
 即使上一轮用户取消了 git 操作选择, 只要 AI 后续又执行了其他改动, 也必须**再次主动反馈**.
 
+> **铁律: 反馈必须真正调用 `question` 工具弹出可点选项, 严禁用普通文本代替!**
+> - ❌ 反例 (无效): 正文写 "按约定询问 git 操作意向:" 然后就停, 或 "我准备提交, 你 OK 吗?" — 这不是 `question`, 用户没法拍板, 等于没问.
+> - ❌ 反例: 用 `question` 工具问别的问题, 却把 git 选项塞进普通正文.
+> - ✅ 正解: 一轮改动收尾时, 显式调用 `question` 工具, `questions[].options` 里放 git 操作选项 (首个标 "(推荐)"), 等用户点选返回后再据此执行.
+> - 判据: 检查自己这一轮**有没有发出 `question` 工具调用**. 只输出了文字、没有工具调用 = 违规. 文档/调研类无代码改动的产出同样适用 (要不要提交文档也是 git 决策).
+
 ### 1.5 Git 流程 (双远程)
 
 任何代码改动后, AI 必须用 `question` 工具反馈改动内容 + 列出提交/推送选项, 由用户决策. AI 不自作主张 `git add` / `git commit` / `git push`.
@@ -439,3 +445,9 @@ AI **仍需 `question`**:
   - **注**: 程序目录 `/root/.numas` (opencode binary/ui/extensions) 是 entrypoint 显式 `--web-ui /root/.numas/ui` 引用、不依赖 HOME, **不在「家目录」范畴, 保持 /root 不动**.
 - **排查方法**: 容器内 `echo $HOME` + `ls $HOME/.zshrc $HOME/.nvm` 确认工具链是否在 $HOME 下; `zsh -lic '...'` 测 login+interactive (numas PTY 实际是 `zsh --login -i`); oh-my-zsh 是否加载看 `$ZSH` 变量非空 / `$ZSH_THEME`.
 - **附加 (终端慢/卡 spinner 误判)**: zsh login 实测仅 ~0.45s (`time zsh -ic 'node --version'`), nvm/ohmyzsh 不是瓶颈; 终端面板卡 spinner 真因常是 **codeblitz workbench storage 初始化失败** (`/api/fs/mkdir` 500) 拖住整个工作台模块加载, 与 shell 速度无关. 验证终端先确认 mkdir 204/200 + explorer 树已渲染, 再测 shell.
+
+#### 23. 改动收尾用普通文本"询问 git"代替 question 工具 → 用户无法拍板, 等于没问
+
+- **问题描述**: 一轮改动/文档产出完成后, AI 在正文写 "按约定询问 git 操作意向:" 或 "我准备提交, 你 OK 吗?" 就停下, **没有真正调用 `question` 工具**. 这不是可点选的决策弹窗, 用户没法拍板, 违反 §1.4 "改动必反馈".
+- **复现路径**: 写完文档/改完代码, 习惯性用一句话收尾代替工具调用; 或用 `question` 问了别的技术问题, 却把 git 选项塞在普通正文里.
+- **解决方案**: 收尾**必须显式调用 `question` 工具**, `questions[].options` 里放 git 操作选项 (提交+推送双远程 / 仅提交 / 暂存 / 不操作, 首个推荐项标 "(推荐)"), 等用户点选返回后再执行. 判据: 自查这一轮**有没有发出 `question` 工具调用** — 只输出文字、无工具调用 = 违规. 文档/调研类无代码改动同样适用 (是否提交文档也是 git 决策). 见 §1.4 铁律.
