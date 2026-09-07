@@ -10,12 +10,12 @@
 #
 # 运行 (entrypoint 拼参, env 映射见 scripts/entrypoint.sh):
 #   docker run --rm -p 4096:4096 numas:latest
-#   → opencode web --hostname 0.0.0.0 --port 4096 --cors '*' --web-ui /root/.numas/sumi
+#   → opencode web --hostname 0.0.0.0 --port 4096 --cors '*' --web-ui /home/.numas/sumi
 #   改端口: -e PORT=8080 改容器内监听, -p 映射需配套: docker run -p 8080:8080 -e PORT=8080 numas:latest
 #
 # 为什么轻量: 旧版多阶段在容器内 npm/bun install + build (网络依赖, 30+ 分钟/次);
 # 本版只做 COPY, 迭代 UI/代码 = 本地重跑对应 build + 重构建镜像 (秒~分钟级).
-# --web-ui 固定指向 /root/.numas/sumi, 替换 UI 成本有固定规则.
+# --web-ui 固定指向 /home/.numas/sumi, 替换 UI 成本有固定规则.
 #
 # 构建 (见 scripts/docker-build.sh):
 #   bash scripts/docker-build.sh          # 本机默认 arch
@@ -119,32 +119,34 @@ RUN mkdir -p /home \
 USER root
 
 # 容器内工作区根 = /home/community (workdir + 默认工作区根, explorer 只见用户文件);
-# 程序目录 ~/.numas (root → /root/.numas, 不进工作区) — 挂载点 (设计文档
-# docs/Docker产物目录挂载点与扩展注册功能设计与测试用例.md):
+# 程序目录 ~/.numas 与 HOME=/home 对齐 (root → /home/.numas, 不进工作区) — 挂载点
+# (设计文档 docs/Docker产物目录挂载点与扩展注册功能设计与测试用例.md):
 #   exec/        opencode 可执行程序 (含内置 /extensions 扩展市场控制器)
-#   ui/          sumi web 静态产物 (entrypoint 默认 --web-ui /root/.numas/ui)
+#   ui/          sumi web 静态产物 (entrypoint 默认 --web-ui /home/.numas/ui)
 #   extensions/  vsix 扩展包集合 (--extensions-dir 指向, opencode 内置市场扫描; 与工程
 #                registry/vsix 同构, 动态识别新增 .vsix)
 # 每目录镜像内置默认产物 (交付即用), 运维可 -v volume 覆盖任一目录升级, 不重建镜像.
 # 注: 扩展市场由 opencode fork 内置 (/extensions 同源端点), 无独立 registry 进程.
+# 注: /home/.numas/ 是路径统一后的最终位置 (2026-09 全量迁移 /root → /home, 与 HOME=/home
+#   一致; 历史镜像若用 /root/.numas/ 路径, --volume 挂载会找不到, 重新部署即可).
 WORKDIR /home/community
-RUN mkdir -p /root/.numas/exec /root/.numas/ui /root/.numas/extensions
+RUN mkdir -p /home/.numas/exec /home/.numas/ui /home/.numas/extensions
 
 # ① exec: opencode 单二进制 — arch 由构建脚本显式传入 (docker-build.sh 传 OPENCODE_ARTIFACT,
 #   与 --platform 一一对应: linux/arm64→opencode-linux-arm64, linux/amd64→opencode-linux-x64).
 #   禁止用 glob (dist 里可能同时存在多平台产物, 会 COPY 冲突/装错 arch). 构建期 --version
 #   冒烟即验证 arch 匹配 (exec format error 会在此暴露).
 ARG OPENCODE_ARTIFACT=opencode-linux-arm64
-COPY opencode/packages/opencode/dist/${OPENCODE_ARTIFACT}/bin/opencode /root/.numas/exec/opencode
+COPY opencode/packages/opencode/dist/${OPENCODE_ARTIFACT}/bin/opencode /home/.numas/exec/opencode
 # ② ui: sumi web 静态产物
-COPY sumi/dist /root/.numas/ui/
+COPY sumi/dist /home/.numas/ui/
 # ③ extensions: 镜像内置空目录 (vsix 不进镜像, 用户拍板 2026-09); 扩展运行时 -v 挂载
-#    vsix 目录到 /root/.numas/extensions/ (opencode --extensions-dir 扫描, 空目录返回空正常)
+#    vsix 目录到 /home/.numas/extensions/ (opencode --extensions-dir 扫描, 空目录返回空正常)
 
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh \
-  && chmod +x /root/.numas/exec/opencode \
-  && /root/.numas/exec/opencode --version
+  && chmod +x /home/.numas/exec/opencode \
+  && /home/.numas/exec/opencode --version
 
 # 端口/host/registry 默认值 (entrypoint 可见的镜像默认; 用户可用短名 env 覆盖, 如
 # -e PORT=8080 替换默认 4096 — entrypoint 读值规则: 短名优先, 长名兜底, 再默认)

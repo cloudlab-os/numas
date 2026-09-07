@@ -379,7 +379,7 @@ AI **仍需 `question`**:
 
 - **问题描述**: sumi postinstall patch (storage 路径) 与 Dockerfile 已改, 但容器内 binary 仍是旧产物 (marker 为 0), 用户验证仍失败, 误判方案无效.
 - **复现路径**: 改 Dockerfile/package.json/patch 后直接跑旧镜像验证.
-- **解决方案**: 验证前先确认"运行中产物"确实含改动: docker 镜像用 `docker exec strings /root/.numas/exec/opencode | grep marker`; 本地 dist 用 grep marker; 交叉/重编产物看构建时间戳. 先对产物版本, 再谈方案对错.
+- **解决方案**: 验证前先确认"运行中产物"确实含改动: docker 镜像用 `docker exec strings /home/.numas/exec/opencode | grep marker`; 本地 dist 用 grep marker; 交叉/重编产物看构建时间戳. 先对产物版本, 再谈方案对错.
 
 #### 12. 改完源码忘了重编产物就验证 → 旧产物报错误导排查
 
@@ -460,7 +460,7 @@ AI **仍需 `question`**:
 - **问题描述**: 容器内 root (uid 0) 运行, Dockerfile `ENV HOME=/home` (codeblitz 虚拟家目录 `/home/.codeblitz` 自洽需要, 见 Dockerfile:44-50); 但 oh-my-zsh 装 `/root/.oh-my-zsh`、nvm 装 `/root/.nvm`、auto-load 写 `/root/.zshrc`. zsh 启动按 `$HOME=/home` 读 `/home/.zshrc` (不存在) → **nvm 不加载 (node/npm command not found)、oh-my-zsh 主题不加载 (提示符裸 `容器ID#`)**. python/git 走 apt 全局 `/usr/bin` 不受影响.
 - **复现路径**: `docker exec <c> bash -lc 'which node'` → 空 (bash 不读 zshrc); `docker exec <c> zsh -lic 'node --version'` → command not found; 但 `zsh -ic 'source /root/.nvm/nvm.sh; node --version'` 手动 source 后正常 → 锁定加载位置错配, 非 node 未装.
 - **解决方案 (用户拍板「家目录统一 /home, 不使用 /root」)**: 所有**交互工具链**装到 `$HOME=/home` 下: oh-my-zsh → `/home/.oh-my-zsh`, nvm+node 22 → `/home/.nvm` (`ENV NVM_DIR=/home/.nvm`), 配置 → `/home/.zshrc`; 验证 `zsh -ic 'node --version; echo $ZSH_THEME'`.
-  - **注**: 程序目录 `/root/.numas` (opencode binary/ui/extensions) 是 entrypoint 显式 `--web-ui /root/.numas/ui` 引用、不依赖 HOME, **不在「家目录」范畴, 保持 /root 不动**.
+  - **注**: 程序目录 `/home/.numas` (opencode binary/ui/extensions) 与 `HOME=/home` 对齐 (2026-09 全量迁移 /root → /home, 见 Dockerfile 注释), entrypoint 默认 `--web-ui /home/.numas/ui`; 与工作区根 `/home/community` 同前缀, 不再分两个 root.
 - **排查方法**: 容器内 `echo $HOME` + `ls $HOME/.zshrc $HOME/.nvm` 确认工具链是否在 $HOME 下; `zsh -lic '...'` 测 login+interactive (numas PTY 实际是 `zsh --login -i`); oh-my-zsh 是否加载看 `$ZSH` 变量非空 / `$ZSH_THEME`.
 - **附加 (终端慢/卡 spinner 误判)**: zsh login 实测仅 ~0.45s (`time zsh -ic 'node --version'`), nvm/ohmyzsh 不是瓶颈; 终端面板卡 spinner 真因常是 **codeblitz workbench storage 初始化失败** (`/api/fs/mkdir` 500) 拖住整个工作台模块加载, 与 shell 速度无关. 验证终端先确认 mkdir 204/200 + explorer 树已渲染, 再测 shell.
 

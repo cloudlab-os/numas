@@ -7,7 +7,7 @@
 //   GET /extensions/<id>/manifest.json  → 文件清单 (codeblitz 安装管线)
 //   GET /extensions/<id>/<file>         → vsix 内 extension/ 平铺资源
 //
-// vsix 目录: --extensions-dir (容器 /root/.numas/extensions, dev registry/vsix).
+// vsix 目录: --extensions-dir (容器 /home/.numas/extensions, dev registry/vsix; 2026-09 路径统一).
 // 目录契约与工程 registry/vsix 同构; 每次请求校验目录签名 (mtime/size),
 // 新增 .vsix 自动入 metadata (动态添加), 无需重启.
 // metadata uri 不带 authority (kt-ext:///<id>), 前端分流到 registryBaseUrl.

@@ -6,7 +6,7 @@
 #   step 2/4: sumi build                    → sumi/dist           → COPY → ui/
 #   step 3/4: opencode 交叉编译 (NUMAS_TARGET) → dist/opencode-linux-<arch> → COPY → exec/
 #   step 4/4: docker buildx 组装 (ubuntu 24.04 + COPY 挂载点产物 + tini entrypoint)
-#             (扩展用 -v 挂载 vsix 到 /root/.numas/extensions, 镜像内置空目录)
+#             (扩展用 -v 挂载 vsix 到 /home/.numas/extensions, 镜像内置空目录)
 #
 # 产物复用: 产物已存在则跳过对应 build (强制重建: --sumi / --opencode /
 #   --force 全部). 迭代成本: 只改 sumi UI → bash scripts/docker-build.sh --sumi.
@@ -21,8 +21,8 @@
 #
 # 运行:
 #   docker run --rm -p 4096:4096 numas:latest
-#   → opencode web --extensions-dir /root/.numas/extensions --registry /extensions
-#     --web-ui /root/.numas/ui (内置扩展市场, 无独立进程; 见 entrypoint.sh)
+#   → opencode web --extensions-dir /home/.numas/extensions --registry /extensions
+#     --web-ui /home/.numas/ui (内置扩展市场, 无独立进程; 见 entrypoint.sh)
 #
 # 运维部署 (linux x86_64 服务器):
 #   1. 前置: docker + buildx; node 20+ / bun (产物缺失时自动构建需要)
@@ -156,7 +156,7 @@ echo "[numas] step 4/4: docker 组装镜像"
 echo "[numas]   platform:   $PLATFORM"
 echo "[numas]   sumi:       $SUMIDIST"
 echo "[numas]   opencode:   $OPENCODE_BIN"
-echo "[numas]   extensions: 挂载方式 (-v vsix目录:/root/.numas/extensions), 镜像内置空目录"
+echo "[numas]   extensions: 挂载方式 (-v vsix目录:/home/.numas/extensions), 镜像内置空目录"
 echo "[numas]   mode:       $([ "$PUSH" = true ] && echo push || echo load)"
 
 # 本机/同构部署: legacy docker build (无需 docker/dockerfile frontend 镜像, docker hub 受限环境可用);

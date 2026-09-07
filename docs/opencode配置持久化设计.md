@@ -24,7 +24,8 @@
 
 - **项目级**配置在项目根的 `opencode.json` 与 `.opencode/` 目录(agents/commands/plugins/...).
 - numas 容器里因 `ENV HOME=/home`, 上述全局目录实际落在 `/home/.local/share/opencode` 等;
-  而程序本体在 `/root/.numas/`(独立于 XDG, 不随 HOME), codeblitz(sumi)的 storage 在 `/home/.codeblitz`.
+  程序本体在 `/home/.numas/`(2026-09 路径统一, 历史 `/root/.numas/` 见 Dockerfile 注释),
+  codeblitz(sumi) 的 storage 在 `/home/.codeblitz`.
 
 > 易错点: ① 工具二进制 `bin/` 在 **cache** 下不在 data 下; ② 文件锁 `locks/`、daemon 状态在 **state**
 > 下不在 data 下; ③ `~/.opencode/bin/opencode` 是 curl 安装脚本的 binary 位置, 与 XDG 体系无关.
@@ -186,7 +187,7 @@ numas 的路径增量全在容器编排层与新增 CLI 参数, 不改 opencode 
 容器内三套路径**相互独立**:
 
 ```
-/root/.numas/                         # ① 程序目录 (Dockerfile, 不随 HOME=/home)
+/home/.numas/                        # ① 程序目录 (Dockerfile, 2026-09 路径统一 /root→/home, 与 HOME 对齐)
 ├── exec/opencode                     #    opencode binary
 ├── ui/                               #    --web-ui, sumi(codeblitz) web 静态产物
 └── extensions/                       #    --extensions-dir, vsix 扩展市场扫描根
@@ -254,7 +255,7 @@ numas 的路径增量全在容器编排层与新增 CLI 参数, 不改 opencode 
 | `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` | server 基础认证(不落盘) |
 | `OPENCODE_WORKSPACE_ID` / `OPENCODE_PERMISSION` / `OPENCODE_CLIENT` / `OPENCODE_PURE` | workspace / 权限模式 / 客户端类型 / 纯模式 |
 
-**numas 侧**(决定 `/root/.numas/` 资源, 不影响 opencode XDG 数据):
+**numas 侧**(决定 `/home/.numas/` 资源, 不影响 opencode XDG 数据):
 `NUMAS_WEB_UI`/`WEB_UI`、`NUMAS_EXTENSIONS_DIR`/`EXTENSIONS_DIR`、`NUMAS_PORT`/`PORT`、
 构建期 `NUMAS_WEB_DIST`、`NUMAS_TARGET`(见 `scripts/entrypoint.sh`、`Dockerfile`).
 
@@ -272,7 +273,7 @@ numas 的路径增量全在容器编排层与新增 CLI 参数, 不改 opencode 
 | codeblitz workbench storage | `/home/.codeblitz` | 中(UI 布局/最近打开) | 保留工作台偏好时挂载 |
 | 缓存(LSP 二进制/models) | `/home/.cache/opencode` | 低(可重新下载) | 一般不挂, 丢了自动重建 |
 | 易失状态 | `/home/.local/state/opencode` | 低 | 不挂 |
-| 程序本体 | `/root/.numas` | 不需要(镜像内置) | 升级用新镜像或 `-v` 覆盖单目录 |
+| 程序本体 | `/home/.numas` | 不需要(镜像内置) | 升级用新镜像或 `-v` 覆盖单目录 |
 
 > 注意: opencode 数据按 `HOME` 落. numas 容器 `HOME=/home`, 所以数据在 `/home/.local/...`;
 > 若运维改了 HOME 或挂了别的 XDG_* 变量, 数据根会随之变化, 备份前先 `docker exec <c> ls -d ~/.local/share/opencode`.
@@ -289,12 +290,12 @@ docker exec $C sh -lc 'echo HOME=$HOME; ls -d ~/.local/share/opencode ~/.config/
 docker exec $C ls -la ~/.local/share/opencode/ | grep -E "opencode.*db|auth.json|storage|log"
 # ③ 全局配置
 docker exec $C ls -la ~/.config/opencode/
-# ④ 程序目录 (独立, /root/.numas)
-docker exec $C ls /root/.numas
+# ④ 程序目录 (独立, /home/.numas, 2026-09 路径统一后)
+docker exec $C ls /home/.numas
 # ⑤ codeblitz storage (sumi)
 docker exec $C ls -d ~/.codeblitz
 # ⑥ 解析后的最终配置 (含受管/合并结果)
-docker exec $C /root/.numas/exec/opencode debug config
+docker exec $C /home/.numas/exec/opencode debug config
 ```
 
 判定:
