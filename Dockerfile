@@ -41,9 +41,19 @@ LABEL org.opencontainers.image.title="numas" \
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# HOME=/home: 工作区是 /home/community (k8s PVC 挂载点), 而 codeblitz 虚拟家目录前缀
+# 也是 /home (storage 在 /home/.codeblitz). 若 HOME=/root, opencode /path 返回 home=/root,
+# 前端 toHostPath 把虚拟 /home/* 映射到 /root/* → 工作区 /home/community 被错映成
+# /root/community: explorer 根 stat/list 全部打到工作区外 (x-opencode-directory: /root),
+# PTY 创建 cwd=/root/community 不存在 → 终端连不上. HOME=/home 后 home 锚点 = /home,
+# /home/community 映射后仍是自身, 虚拟家目录 /home/.codeblitz 也自洽.
+ENV HOME=/home
+
 # 运行时依赖: 容器内跑 opencode web + 工作区开发常用工具.
 #   ca-certificates/tini = 运行必需; git/curl/wget/jq/python* = 容器内工作区开发 (AI agent 常用).
-#   node 不需要 (sumi 前端跑浏览器, opencode binary 自含运行时)
+#   zsh = root 默认交互 shell (oh-my-zsh), nvm + node 22 走 ~/.nvm 在 zsh 交互时自动加载.
+#     sumi 前端跑浏览器, opencode binary 自含运行时 — 容器内 node 22 仅供工作区 AI agent / 用户的
+#     脚本/工具链使用, 不用作 opencode 自身运行依赖.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
        ca-certificates tini \
@@ -61,8 +71,42 @@ RUN apt-get update \
        build-essential pkg-config \
        # sqlite: CLI 工具 + 运行时库
        sqlite3 libsqlite3-0 \
+       # locales: opencode fs/list 等 node fs 读中文路径要 UTF-8 locale, 否则 readdir
+       # dirent.name 字节流被 POSIX locale 当 Latin-1 截断, explorer 显示乱码
+       locales \
   && rm -rf /var/lib/apt/lists/* \
-  && ln -sf /usr/bin/python3 /usr/local/bin/python
+  && ln -sf /usr/bin/python3 /usr/local/bin/python \
+  # 生成 C.UTF-8 locale (镜像内不装 zh_CN.UTF-8 太重, C.UTF-8 已是 POSIX 兼容的 UTF-8 locale)
+  && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+  && locale-gen \
+  && update-locale LANG=C.UTF-8
+
+# 默认 UTF-8 locale: opencode fs 操作 (readdir/stat) 读中文路径正确解码, 容器内 zsh/python 也
+# 默认 UTF-8 输出. C.UTF-8 是 POSIX 兼容的 UTF-8, 不依赖额外语言包.
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+# oh-my-zsh + nvm + node 22 — 运行 uid=root 但家目录统一 $HOME=/home (见上 ENV HOME).
+#   所有交互工具链都装在 /home 下, 不使用 /root:
+#     oh-my-zsh → /home/.oh-my-zsh,  nvm+node 22 → /home/.nvm,  zsh 配置 → /home/.zshrc.
+#   zsh 启动按 $HOME=/home 读 /home/.zshrc → 自动加载 oh-my-zsh 主题 + nvm (node/npm/npx),
+#   与 codeblitz 虚拟家目录 /home/.codeblitz 同根自洽. (root 仅为运行 uid, 家目录不是 /root;
+#   /etc/passwd 里 root 的 home 字段仍 /root 但 zsh 认 $HOME 环境变量, docker/PTY 都继承 ENV HOME.)
+#   - nvm 仅 zsh 交互自动加载 (官方设计); 非交互 sh/python 子进程需脚本开头 source nvm.sh.
+#   - oh-my-zsh/nvm 走 gitee 镜像, node 二进制走 npmmirror (国内网).
+#   - python 3.12 走 apt 全局 (上方 line 69), 不受家目录影响.
+ENV NVM_DIR=/home/.nvm
+RUN mkdir -p /home \
+  && git clone --depth=1 https://gitee.com/mirrors/ohmyzsh.git /home/.oh-my-zsh \
+  && cp /home/.oh-my-zsh/templates/zshrc.zsh-template /home/.zshrc \
+  && printf '\n# nvm auto-load (zsh)\nexport NVM_DIR="/home/.nvm"\n[ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"\n[ -s "$NVM_DIR/bash_completion" ] && \\. "$NVM_DIR/bash_completion"\n' >> /home/.zshrc \
+  # nvm 国内源: gitee 镜像 git clone; node 二进制走 npmmirror (NVM_NODEJS_ORG_MIRROR,
+  # 临时 export 限本 RUN — 不持久到镜像 ENV, 避免污染运行时). PROFILE=/dev/null 跳过 nvm 写 profile.
+  && export PROFILE=/dev/null \
+  && git clone --depth=1 https://gitee.com/mirrors/nvm.git "$NVM_DIR" \
+  && /bin/zsh -c 'export NVM_NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node && . "$NVM_DIR/nvm.sh" && nvm install 22 && nvm alias default 22 && nvm use default' \
+  && chsh -s /bin/zsh root \
+  && /bin/zsh -ic 'node --version && npm --version'
 
 # 按用户拍板: 容器内直接以 root 运行 (ubuntu:24.04 预置 uid 1000 的 ubuntu 用户,
 # 与自建服务用户冲突, 不再 useradd)

@@ -418,3 +418,24 @@ AI **仍需 `question`**:
   - **附带**: 拓宽 NotFound defect 识别 (effect v4 beta 形状不固定: `PlatformError && reason._tag==='NotFound'` / `reason._tag==='NotFound'` / `code==='ENOENT'` / message 正则), mkdir 补包装.
 - **铁律**: **不得再手改 node_modules** (用户明令). 历史 postinstall patch (`patch-codeblitz-homefileserviceprovider.js` 等) 打过 `bundle/codeblitz.global.js` 这种 webpack 根本不引用的 UMD 全包 (实际入口是 `lib/index.js`), 是死 patch; 新修复一律走 sumi/opencode src.
 - **排查方法**: ① server 侧 `console.error('[fs-diag]', JSON.stringify({name,msg,code,reasonTag}))` 进 catchCause 打 die defect 真实形状 (容器 `docker logs` 看), 别靠猜 instanceof; ② `curl -H "x-opencode-directory: <header>" /api/fs/stat?path=<x>` 直接复现, 对比 header 不同 (/root vs /) 的 200/500 定位锚点; ③ 同一 defect 用两个 handler (handleRaw vs response) 的返码对比, 快速区分「defect 识别失败」还是「错误序列化层位错误」; ④ 最终判功能: `docker exec numas find /root/.codeblitz -type f` 看 storage 文件是否都建成 (建成=早期 500/404 只是探测噪音, numas 前端已 catch).
+
+#### 21. symlink 指向 workspace 外: 沙箱用「逻辑路径」校验, 别用 realPath 后的物理路径
+
+- **问题描述**: workspace 内 symlink 指向外部目录 (如 `/home/community/333 -> /app/333`), explorer list 能显示 (需 fs.list 归一化 symlink type), 但 **stat / 展开 / 「在终端打开」全失败**: fs.stat/list 500 (`Path escapes the location`), pty.create 400 (`BadRequest`).
+- **根因**: 边界安全检查用了 **realPath 解析后** 的物理路径做 `contains(root, real)`:
+  - `packages/core/src/filesystem.ts` `resolve()`: `fs.realPath(absolute)` 把 `.../333/sub` 解析成 `/app/333/sub`, 再 `contains(root=/home/community, /app/...)` = false → die.
+  - `packages/opencode/.../handlers/pty.ts` create: `FSUtil.contains(FSUtil.resolve(instanceDir), FSUtil.resolve(cwd))`, 而 `FSUtil.resolve` 内部 `realpathSync` (fs-util.ts:250) 同样把 cwd 物理化 → BadRequest.
+- **解决方案 (用户拍板「放开 symlink 跟随」)**: 边界校验改用**逻辑路径** (`path.resolve`, 不 realpath) — 仍拦截直接 `../` 路径逃逸 (`contains(directory, absolute)`), 但放行「逻辑路径在 workspace 内、realPath 后落在外」的 symlink:
+  - fs `resolve()`: 删 `contains(root, real)` 二次校验, 只留逻辑 `contains(directory, absolute)`; `resolveTarget()` 同理删 parentReal 校验.
+  - fs `list`: symlink dirent (`item.type==="symlink"`) 用 `fs.stat(join)` 跟随, 按目标类型归一化成 `file`/`directory` (schema `Entry.type` 只有这俩字面量, 不加新 type); broken symlink catch 成 null 跳过.
+  - pty create: 边界校验 `path.resolve` 逻辑路径; spawn `cwd` 传逻辑路径 (chdir 自身穿透 symlink) + 显式 `env.PWD=逻辑路径` — zsh/bash 启动校验 `$PWD` 与 getcwd() inode 一致后信任它, 于是终端 `pwd`/提示符显示 symlink 逻辑路径 (`/home/community/333/sub`) 而非物理 (`/app/333/sub`), 与 explorer 路径一致 (`pwd -P` 才是物理).
+- **排查方法**: ① 区分「list 显示」vs「stat/展开」: list 已归一化能显示不代表 resolve 沙箱放行; ② 容器内 `node -e 'fs.statSync(link)'` 报 ENOENT 但 `ls -la link` 正常 → symlink target 在容器内不存在 (挂载范围外/绝对宿主路径), 非代码问题; ③ pty 400 用浏览器 network 抓 `POST /pty` request body 的 `cwd`, 对照 `FSUtil.resolve` 是否 realpath 物理化.
+
+#### 22. ENV HOME=/home 但交互工具链 (nvm/oh-my-zsh) 装在 /root → zsh 终端 node 缺失、主题不加载
+
+- **问题描述**: 容器内 root (uid 0) 运行, Dockerfile `ENV HOME=/home` (codeblitz 虚拟家目录 `/home/.codeblitz` 自洽需要, 见 Dockerfile:44-50); 但 oh-my-zsh 装 `/root/.oh-my-zsh`、nvm 装 `/root/.nvm`、auto-load 写 `/root/.zshrc`. zsh 启动按 `$HOME=/home` 读 `/home/.zshrc` (不存在) → **nvm 不加载 (node/npm command not found)、oh-my-zsh 主题不加载 (提示符裸 `容器ID#`)**. python/git 走 apt 全局 `/usr/bin` 不受影响.
+- **复现路径**: `docker exec <c> bash -lc 'which node'` → 空 (bash 不读 zshrc); `docker exec <c> zsh -lic 'node --version'` → command not found; 但 `zsh -ic 'source /root/.nvm/nvm.sh; node --version'` 手动 source 后正常 → 锁定加载位置错配, 非 node 未装.
+- **解决方案 (用户拍板「家目录统一 /home, 不使用 /root」)**: 所有**交互工具链**装到 `$HOME=/home` 下: oh-my-zsh → `/home/.oh-my-zsh`, nvm+node 22 → `/home/.nvm` (`ENV NVM_DIR=/home/.nvm`), 配置 → `/home/.zshrc`; 验证 `zsh -ic 'node --version; echo $ZSH_THEME'`.
+  - **注**: 程序目录 `/root/.numas` (opencode binary/ui/extensions) 是 entrypoint 显式 `--web-ui /root/.numas/ui` 引用、不依赖 HOME, **不在「家目录」范畴, 保持 /root 不动**.
+- **排查方法**: 容器内 `echo $HOME` + `ls $HOME/.zshrc $HOME/.nvm` 确认工具链是否在 $HOME 下; `zsh -lic '...'` 测 login+interactive (numas PTY 实际是 `zsh --login -i`); oh-my-zsh 是否加载看 `$ZSH` 变量非空 / `$ZSH_THEME`.
+- **附加 (终端慢/卡 spinner 误判)**: zsh login 实测仅 ~0.45s (`time zsh -ic 'node --version'`), nvm/ohmyzsh 不是瓶颈; 终端面板卡 spinner 真因常是 **codeblitz workbench storage 初始化失败** (`/api/fs/mkdir` 500) 拖住整个工作台模块加载, 与 shell 速度无关. 验证终端先确认 mkdir 204/200 + explorer 树已渲染, 再测 shell.
