@@ -203,7 +203,9 @@ const layer = Layer.effect(
         m.info.role === "user" && !m.parts.every((p) => "synthetic" in p && p.synthetic)
       const idx = input.history.findIndex(real)
       if (idx === -1) return
-      if (input.history.filter(real).length !== 1) return
+      // Title is still default here (isDefaultTitle checked above), so it was never generated —
+      // e.g. the first turn was aborted before the forked title task finished. Regenerate from the
+      // first real user message on a later turn instead of giving up forever.
 
       const context = input.history.slice(0, idx + 1)
       const firstUser = context[idx]

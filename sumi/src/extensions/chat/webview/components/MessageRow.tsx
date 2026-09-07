@@ -61,9 +61,21 @@ export const MessageRow: React.FC<{
   const fullText = textParts.map((p: any) => p.text).join('\n');
   const copy = () => navigator.clipboard?.writeText(fullText);
 
+  // 中断在模型产出任何内容前: 后端留下 parts 为空 (或仅有无内容的 step-start/step-finish) 的
+  // assistant 消息, finish=None. 非流式中时显式给一个「已停止生成」占位, 避免渲染成空白气泡.
+  const hasContent = (row.parts || []).some((p: any) =>
+    (p?.type === 'text' && String(p.text || '').trim()) ||
+    (p?.type === 'reasoning' && String(p.text || '').trim()) ||
+    p?.type === 'tool' || p?.type === 'file'
+  );
+  const showAborted = !streaming && !hasContent;
+
   return (
     <div className="chat__msg is-assistant">
       <div className="chat__msg-body">
+        {showAborted && (
+          <div className="chat__msg-aborted">已停止生成</div>
+        )}
         {(row.parts || []).map((part: any, i: number) => {
           const questionMeta = part?.type === 'tool' && part?.tool === 'question'
             ? getQuestionStore().get(sessionID) : null;

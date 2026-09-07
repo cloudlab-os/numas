@@ -511,3 +511,18 @@ AI **仍需 `question`**:
   1. **"切分支/重建镜像就好" 先别归因代码差异 — 先 `git rev-parse <branch>` 对 SHA**. 本例 main 与 feat/yunyan 是**同一 commit**, "好了" 的真实变量是**容器重启** (state 重建重读 auth.json), 不是分支.
   2. **catalog ≠ 运行时激活表**: `/provider` 能列出 provider/model 只代表 catalog 有; 发消息能否用看 `s.providers` (InstanceState, 构建时快照 auth). 两表现象不一致是这类 bug 的指纹.
   3. **全局路由 vs instance 路由的 context 边界**: handler 里调任何 `InstanceState.*` (隐式读 `directory`/`InstanceRef`) 前, 先确认该路由挂在 RootHttpApi(全局, 无 InstanceRef) 还是 InstanceHttpApi(有 directory). 全局资源 (auth/config) 变更用 `invalidateAll`.
+
+#### 26. 会话标题在「首条消息失败/未产出」后永不生成 + 中断的空 assistant 气泡无状态
+
+- **问题 A (标题)**: 用户首条消息**报错** (如 #25 的 ModelNotFound, 当时 provider 未激活) 或极早中断, 会话标题一直停在 `New session - <ts>` (前端显示"新会话"); 之后正常发消息标题也不更新.
+- **根因 A**: `packages/opencode/src/session/prompt.ts` 的 `ensureTitle` 在每个 LLM 轮次 `step===1` 时 `Effect.forkIn` 跑, 但旧逻辑前置条件 `if (input.history.filter(real).length !== 1) return` — 要求**恰好 1 条真实用户消息**才生成. 第一条失败后第二条成功时已有 2 条用户消息 → 直接 return, 标题永久缺失. 注意: 单纯 abort (点停止) **不会**杀标题 fork (fork 出的 title 任务不受 prompt abort 影响, 多数情况标题仍能生成); 真正缺标题的是**第一条 message 报错** (title fork 里 getSmallModel/getModel 拿不到 model 而失败) 的场景.
+- **修复 A (已修)**: 删掉 `length !== 1` 限制. 上面已有 `isDefaultTitle(title)` 闸 (非默认标题 = 已生成, 直接 return), 所以放宽后: 标题仍是默认值就基于**首条真实用户消息** (`context = history.slice(0, idx+1)`) 补生成, 已生成则不重复. 单消息正常路径行为不变.
+- **问题 B (空气泡)**: 模型产出任何内容**前**点停止, 后端留一条 `parts=[]`、`finish=None`、无 error 的 assistant 消息 (报错 ModelNotFound 则**不产生** assistant 行, 错误走红色横幅). 前端 `MessageRow` 对空 parts assistant 只渲染复制按钮 → 空白气泡; abort 的 error 事件又被前端刻意静默 (Chat.tsx `session.error` 里 `/AbortError|aborted|interrupt/` 不弹错) → 用户看不到任何状态.
+- **修复 B (已修)**: `sumi/.../chat/webview/components/MessageRow.tsx` 对 assistant 行算 `hasContent` (text/reasoning 非空, 或有 tool/file part); `!streaming && !hasContent` 时渲染灰色斜体占位「已停止生成」(样式 `.chat__msg-aborted`, 用 `--ai-fg-muted`). 报错场景不留空 assistant 行, 故占位不会误伤报错.
+- **验证方法**:
+  1. 标题: 新建会话 → 第 1 条发给**未连接** provider (报错, 标题停 New session) → 第 2 条发给已连接 provider 成功 → 标题应补生成 (实测 "周末徒步路线规划"). 查 `GET /session` 的 `title`.
+  2. 空气泡: `GET /session/<id>/message` 看 assistant 行 `parts=[] finish=None` 即中断空消息; 前端该行应显「已停止生成」. 报错路径 (`GET /global/event` 的 `session.error`) 不落 assistant 行, 走红色错误横幅.
+- **排查教训**:
+  1. **fork 的 title 任务 vs prompt 主循环 abort**: `Effect.forkIn(scope)` 出的标题生成不随 prompt abort 取消, 所以"点停止"一般不丢标题; 丢标题要查 title fork **内部是否失败** (getModel 报错) — 别只盯着 abort.
+  2. **空 assistant 消息是 abort 指纹, 报错不留 assistant 行**: `parts=[] && finish=None && error=null` = 中断在产出前; `session.error` SSE 事件 + 无 assistant 行 = 报错. 前端区分这两类才能给对状态 (中断→"已停止生成", 报错→红色横幅).
+  3. **前端静默 abort 错误是对的** (不弹红框), 但静默不等于不展示 — 中断状态要在消息流里用占位表达.

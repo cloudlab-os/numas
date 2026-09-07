@@ -179,12 +179,19 @@ export const styles = `
 /* assistant 消息体撑满消息列宽, 卡片宽度统一适配 */
 .chat__msg.is-assistant > .chat__msg-body { flex: 1; min-width: 0; }
 .chat__msg-user-col { display: flex; flex-direction: column; align-items: flex-end; max-width: 100%; min-width: 0; }
-.chat__msg-body {
+ .chat__msg-body {
   max-width: 100%; min-width: 0;
   color: var(--ai-fg);
   font-size: 13px; line-height: 1.65;
   overflow-wrap: anywhere;
-}
+ }
+ /* 中断后无内容的 assistant 消息占位 */
+ .chat__msg-aborted {
+  color: var(--ai-fg-muted);
+  font-size: 12.5px;
+  font-style: italic;
+  padding: 2px 0;
+ }
 .chat__msg-body > * { min-width: 0; max-width: 100%; }
 /* 卡片/文本统一占满消息体宽度 */
 .chat__msg-body > div,
