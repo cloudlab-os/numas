@@ -449,6 +449,8 @@ export const Chat: React.FC = () => {
         role: m.info?.role || m.role,
         parts: m.parts || m.info?.parts || [],
         time: m.info?.time || undefined,
+        modelID: m.info?.modelID || undefined,
+        providerID: m.info?.providerID || undefined,
       }));
       setRows(rs);
     } catch (e) { setApiError(e); }
@@ -967,7 +969,9 @@ export const Chat: React.FC = () => {
     () => agents.filter((a: any) => {
       const id = a.id || a.name;
       const mode = a.mode || a.data?.mode;
-      return id && !HIDDEN_AGENTS.has(id) && mode === 'primary';
+      // 与 loadConfig 兜底一致: primary + all 都可作为顶层对话 agent (all = 可主可子);
+      // subagent 仅被 @ 调用, 不进 mode 选择器. 内部 agent (compaction/title/summary) 由 HIDDEN_AGENTS 屏蔽.
+      return id && !HIDDEN_AGENTS.has(id) && (mode === 'primary' || mode === 'all');
     }),
     [agents]
   );
@@ -1810,7 +1814,7 @@ export const Chat: React.FC = () => {
                                 onClick={() => onSwitchAgent(id)}
                                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSwitchAgent(id); }}
                               >
-                                <span className="chat__modal-item-emoji">{AGENT_ICONS[id] || '✨'}</span>
+                                <span className="chat__modal-item-emoji">{a.icon || AGENT_ICONS[id] || '🤖'}</span>
                                 <span className="chat__modal-item-body">
                                   <span className="chat__modal-item-name">{a.name || id}</span>
                                   {desc && <span className="chat__modal-item-desc">{desc}</span>}

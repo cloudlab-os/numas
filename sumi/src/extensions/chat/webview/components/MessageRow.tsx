@@ -1,4 +1,6 @@
 import React from 'react';
+import { useInjectable } from '@opensumi/ide-core-browser/lib/react-hooks/injectable-hooks';
+import { IMessageService } from '@opensumi/ide-overlay';
 import { PartRenderer } from '../parts/PartRenderer';
 import { getQuestionStore, extractText, formatDuration, type Row } from '../helpers';
 
@@ -12,9 +14,14 @@ export const MessageRow: React.FC<{
   onAbortSession?: (sid: string) => void;
   busy?: boolean;
 }> = ({ row, streaming, done, sessionID, onReplyQuestion, onAbortSession, busy }) => {
+  const messageService = useInjectable<IMessageService>(IMessageService);
+  const notifyCopied = React.useCallback(() => {
+    try { messageService?.info('已复制'); } catch { /* 容器外无 DI 时静默 */ }
+  }, [messageService]);
+
   if (row.role === 'user') {
     const text = extractText(row.parts);
-    const copy = () => navigator.clipboard?.writeText(text);
+    const copy = () => { navigator.clipboard?.writeText(text); notifyCopied(); };
     const fileParts = (row.parts || []).filter((p: any) => p?.type === 'file');
     return (
       <div className="chat__msg is-user">
@@ -50,6 +57,7 @@ export const MessageRow: React.FC<{
   const stepFinish = row.parts?.find((p: any) => p?.type === 'step-finish');
   const modelID = stepFinish?.modelID
     || row.parts?.find((p: any) => p?.type === 'text' && p?.modelID)?.modelID
+    || row.modelID
     || '';
   // 耗时: 优先 step-finish time, 回退到消息 info.time (created→completed)
   const start = stepFinish?.time?.start ?? row.time?.created;
@@ -59,7 +67,7 @@ export const MessageRow: React.FC<{
   const cost = stepFinish?.cost;
   const textParts = row.parts?.filter((p: any) => p?.type === 'text') || [];
   const fullText = textParts.map((p: any) => p.text).join('\n');
-  const copy = () => navigator.clipboard?.writeText(fullText);
+  const copy = () => { navigator.clipboard?.writeText(fullText); notifyCopied(); };
 
   // 中断在模型产出任何内容前: 后端留下 parts 为空 (或仅有无内容的 step-start/step-finish) 的
   // assistant 消息, finish=None. 非流式中时显式给一个「已停止生成」占位, 避免渲染成空白气泡.

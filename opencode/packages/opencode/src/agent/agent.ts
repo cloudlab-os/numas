@@ -41,6 +41,7 @@ export const Info = Schema.Struct({
   topP: Schema.optional(Schema.Finite),
   temperature: Schema.optional(Schema.Finite),
   color: Schema.optional(Schema.String),
+  icon: Schema.optional(Schema.String),
   permission: PermissionV1.Ruleset,
   model: Schema.optional(
     Schema.Struct({
@@ -286,6 +287,7 @@ const layer = Layer.effect(
           item.topP = value.top_p ?? item.topP
           item.mode = value.mode ?? item.mode
           item.color = value.color ?? item.color
+          item.icon = value.icon ?? item.icon
           item.hidden = value.hidden ?? item.hidden
           item.name = value.name ?? item.name
           item.steps = value.steps ?? item.steps

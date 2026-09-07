@@ -31,6 +31,9 @@ const AgentSchema = Schema.StructWithRest(
     color: Schema.optional(Color).annotate({
       description: "Hex color code (e.g., #FF5733) or theme color (e.g., primary)",
     }),
+    icon: Schema.optional(Schema.String).annotate({
+      description: "Emoji or short icon string shown for the agent in pickers",
+    }),
     steps: Schema.optional(PositiveInt).annotate({
       description: "Maximum number of agentic iterations before forcing text-only response",
     }),
@@ -51,6 +54,7 @@ const KNOWN_KEYS = new Set([
   "mode",
   "hidden",
   "color",
+  "icon",
   "steps",
   "maxSteps",
   "options",

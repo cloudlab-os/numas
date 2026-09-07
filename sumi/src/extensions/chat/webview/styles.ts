@@ -184,6 +184,7 @@ export const styles = `
   color: var(--ai-fg);
   font-size: 13px; line-height: 1.65;
   overflow-wrap: anywhere;
+  user-select: text;
  }
  /* 中断后无内容的 assistant 消息占位 */
  .chat__msg-aborted {
@@ -221,7 +222,7 @@ export const styles = `
   font-size: 13px; line-height: 1.5;
   max-width: 100%;
 }
-.chat__msg-user-text { white-space: pre-wrap; }
+.chat__msg-user-text { white-space: pre-wrap; user-select: text; }
 .chat__part-file--image {
   display: block; max-width: 240px; max-height: 240px;
   border-radius: 8px; margin-top: 6px;
@@ -1056,6 +1057,7 @@ export const styles = `
   padding: 0 4px;
 }
 .tool__caret {
+  margin-left: auto;
   color: var(--ai-fg-muted); font-size: 11px; flex-shrink: 0;
   padding: 0 6px; min-width: 14px; text-align: center;
   transition: transform .15s;
@@ -1102,6 +1104,7 @@ export const styles = `
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px; line-height: 1.6;
   max-width: 100%; min-width: 0;
+  user-select: text;
   overflow-x: auto; overflow-y: auto;
   white-space: pre-wrap; word-break: break-all;
   max-height: 260px;
@@ -1364,6 +1367,7 @@ export const styles = `
   color: var(--ai-fg); flex: 1; min-width: 0;
 }
 .todo__caret {
+  margin-left: auto;
   color: var(--ai-fg-muted); font-size: 11px; flex-shrink: 0;
   padding: 0 4px; min-width: 14px; text-align: center;
 }
@@ -1405,6 +1409,64 @@ export const styles = `
 .todo__icon { color: var(--ai-fg-muted); }
 .todo__icon--spin { display: inline-block; animation: todoSpin 1s linear infinite; }
 @keyframes todoSpin { to { transform: rotate(360deg); } }
+
+/* ========== Sub-agent (委派子任务) ========== */
+.sub {
+  margin: 4px 0;
+  background: var(--ai-input-bg);
+  border-radius: 8px;
+  border: 1px solid var(--ai-divider);
+  overflow: hidden;
+  min-width: 0;
+  font-size: 12.5px;
+}
+.sub__head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  min-width: 0;
+  color: var(--ai-fg);
+}
+.sub__dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ai-fg-muted); flex-shrink: 0;
+}
+.sub__dot.is-completed { background: var(--ai-success, #16a34a); }
+.sub__dot.is-running { background: var(--ai-accent); animation: subPulse 1.4s ease-in-out infinite; }
+.sub__dot.is-error { background: var(--ai-danger); }
+@keyframes subPulse { 50% { opacity: .35; } }
+.sub__name { font-weight: 600; }
+.sub__status {
+  font-size: 10.5px; color: var(--ai-fg-muted);
+  padding: 1px 6px; border-radius: 4px;
+  background: var(--ai-hover);
+  flex-shrink: 0;
+}
+.sub__id {
+  margin-left: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px; color: var(--ai-fg-muted);
+  opacity: .7;
+}
+.sub__prompt {
+  padding: 0 10px 6px 26px;
+  font-size: 11.5px; color: var(--ai-fg-muted);
+  line-height: 1.5;
+}
+.sub__out {
+  padding: 0 10px 8px 26px;
+}
+.sub__out > summary {
+  font-size: 11.5px; color: var(--ai-fg-muted);
+  cursor: pointer; user-select: none;
+  padding: 2px 0;
+}
+.sub__out > pre {
+  margin: 4px 0 0;
+  font-size: 11.5px; color: var(--ai-fg);
+  background: var(--ai-bg);
+  padding: 6px 8px; border-radius: 6px;
+  overflow-x: auto; white-space: pre-wrap;
+}
 
 /* ========== Reasoning (OpenCode style) ========== */
 .reason {

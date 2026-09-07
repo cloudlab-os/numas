@@ -23,6 +23,9 @@ export interface Row {
   error?: any;
   /** 消息时间戳 (created/completed), 用于 meta 展示耗时 */
   time?: { created?: number; completed?: number };
+  /** 当次对话模型 (assistant 消息 info 级, step-finish part 常缺 modelID 时兜底) */
+  modelID?: string;
+  providerID?: string;
 }
 
 export const HIDDEN_AGENTS = new Set(['compaction', 'title', 'summary']);

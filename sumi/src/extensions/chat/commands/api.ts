@@ -201,7 +201,8 @@ export async function aiDeleteAllSessions(): Promise<number> {
 }
 
 /** 会话内 agent 列表 — 用全局 SDK client (已带 cwd header), 拿全量 (内置 + project 自定义),
- *  只返回 mode === 'primary' 的.
+ *  返回可作为顶层对话角色的 agent: mode === 'primary' | 'all' (all = 可主可子);
+ *  subagent 仅被 @ 调用, 不进 mode 选择器. 内部 agent (compaction/title/summary) 由 UI 层 HIDDEN_AGENTS 屏蔽.
  *
  *  关键: 必须传有效 cwd 作为 directory query (SDK 的 cwdHeader 是默认 cwd, 这里再显式传
  *  防止 window.location.pathname=/ 时 opencode 走 home 解析), 否则拿不到 .opencode/agents/*.md
@@ -212,7 +213,7 @@ export async function aiListAgents(): Promise<any[]> {
   if (!client) {
     // 兜底: SDK 未就绪, 走 opencodeFetch (拿 SDK baseUrl + cwdHeader)
     const list = await opencodeFetch<any[]>('/agent', { headers: { Accept: 'application/json' } });
-    return filterPrimaryAgents(list);
+    return filterVisibleAgents(list);
   }
   const cwd = (typeof localStorage !== 'undefined' ? localStorage.getItem('APP_CWD') : '')
     || (getGlobalOpencodeRuntime().cwd || '');
@@ -220,18 +221,19 @@ export async function aiListAgents(): Promise<any[]> {
     query: cwd ? { directory: cwd } : undefined,
   });
   const list = (r as any)?.data ?? r;
-  return filterPrimaryAgents(Array.isArray(list) ? list : []);
+  return filterVisibleAgents(Array.isArray(list) ? list : []);
 }
 
-function filterPrimaryAgents(list: any[]): any[] {
+function filterVisibleAgents(list: any[]): any[] {
   return list
-    .filter((a) => a && a.mode === 'primary')
+    .filter((a) => a && (a.mode === 'primary' || a.mode === 'all'))
     .map((a) => ({
       id: a.name,
       name: a.name,
       description: a.description,
       mode: a.mode,
       native: a.native,
+      icon: a.icon,
     }));
 }
 
