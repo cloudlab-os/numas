@@ -44,6 +44,7 @@ const FTSERVICE_FILE = path.resolve(
 
 const MARKER_DEFER = '__numasDeferDispose';
 const MARKER_RECOVER = '__numasRecoverRoot';
+const MARKER_KEEP_ROOT = '__numasKeepRootOnResolve';
 
 // ============================================================================
 // Patch 1: FileTreeModelService dispose 推迟
@@ -132,24 +133,22 @@ const FTSERVICE_NEW = `        this.toDispose.push(this.corePreferences.onPrefer
                 this.refresh();
             }
         }));
-        // numas patch (__numasRecoverRoot): init 是 framework fire-and-forget 启动的,
+        // numas patch (__numasRecoverRoot + __numasKeepRootOnResolve): init 是 framework fire-and-forget 启动的,
         // await workspaceService.roots 期间 module.ts 的 setWorkspace 可能已经触发 emit,
         // 我们的 onWorkspaceChanged listener 错过 → fileTreeService.root 仍是 undefined →
         // explorer 只渲染 workspace 三角没子节点. 现在 init 走完 listener 都注册好,
-        // 但 emit 不会再触发 — 手动重建 root (新 Directory 实例, 跟 line 109 listener 一致).
+        // 但 emit 不会再触发 — 手动 fire 一次让 FileTreeModelService.initTreeModel() 跑.
         //
-        // 注意: 不 fire this.onWorkspaceChangeEmitter.fire(newRoot)!
-        //   因为 fire 会触发 FileTreeModelService listener → initTreeModel → resolveChildren
-        //   → line 230 this.root = children[0] (根目录的第一个子节点) — 覆盖我们的 newRoot,
-        //   且 children[0] 是文件 (如 .DS_Store), UI 渲染出来没 children.
-        //   只 set root + refresh, explorer 视图会自然通过 fireFilesChange 拿到 children.
+        // 副作用: 原版 fire(newRoot) → FileTreeService.resolveChildren 没 parent → line 230
+        //   this.root = children[0] (根目录的第一个子文件, 比如 .DS_Store) — 覆盖我们的根.
+        // 治本: 在 FileTreeService.resolveChildren 同样标 __numasRecoverRoot 标志位, 检测
+        //   this.root 已经是非空新根时, 不再覆盖, 直接返回 [this.root, ...children].
         if (this._roots && this._roots.length > 0 && !this.root) {
             const __numasRoots = this._roots;
             const __numasUri = new ide_core_browser_1.URI(__numasRoots[0].uri);
             const __numasRoot = new file_tree_node_define_1.Directory(this, undefined, __numasUri, __numasUri.displayName, __numasRoots[0], this.fileTreeAPI.getReadableTooltip(__numasUri));
             this.root = __numasRoot;
-            // 触发 explorer 重新拉根 (fireFilesChange 也行, refresh 走内部 _changeEventDispatchQueue)
-            this.fileServiceClient.fireFilesChange({ changes: [{ uri: __numasUri.toString(), type: 1 }] });
+            this.onWorkspaceChangeEmitter.fire(__numasRoot);
             if (typeof window !== 'undefined') {
                 window.__numasInit = window.__numasInit || {};
                 window.__numasInit.fired = true;
@@ -158,6 +157,47 @@ const FTSERVICE_NEW = `        this.toDispose.push(this.corePreferences.onPrefer
             }
         }
     }`;
+    // numas patch 配套: FileTreeService.resolveChildren 没 parent 时, 不让 children[0] 覆盖
+    // 已存在的根 (numasRecoverRoot 创建的) — 返回 [this.root, ...children] 让 explorer
+    // 既显示根节点也能列出子项.
+    const FTSERVICE_RESOLVE_OLD = `                if (this._roots.length > 0) {
+                    children = await (await this.fileTreeAPI.resolveChildren(this, this._roots[0])).children;
+                    children.forEach((child) => {
+                        // 根据workspace更新Root名称
+                        const rootName = this.workspaceService.getWorkspaceName(child.uri);
+                        if (rootName && rootName !== child.name) {
+                            child.updateMetaData({
+                                name: rootName,
+                            });
+                        }
+                        if (child.filestat.isSymbolicLink || child.filestat.isInSymbolicDirectory) {
+                            this._symbolicFiles.set(child.filestat.uri, child);
+                        }
+                    });
+                    this.watchFilesChange(new ide_core_browser_1.URI(this._roots[0].uri));
+                    this.root = children[0];
+                    return children;
+                }`;
+    const FTSERVICE_RESOLVE_NEW = `                if (this._roots.length > 0) {
+                    children = await (await this.fileTreeAPI.resolveChildren(this, this._roots[0])).children;
+                    children.forEach((child) => {
+                        // 根据workspace更新Root名称
+                        const rootName = this.workspaceService.getWorkspaceName(child.uri);
+                        if (rootName && rootName !== child.name) {
+                            child.updateMetaData({
+                                name: rootName,
+                            });
+                        }
+                        if (child.filestat.isSymbolicLink || child.filestat.isInSymbolicDirectory) {
+                            this._symbolicFiles.set(child.filestat.uri, child);
+                        }
+                    });
+                    this.watchFilesChange(new ide_core_browser_1.URI(this._roots[0].uri));
+                    // numas patch (__numasKeepRootOnResolve): 根已被 recover 创建 (this.root 非空) 时,
+                    // 不要再用 children[0] 覆盖 — 保留 numasRoot 当作项目根, children 挂它下面.
+                    if (!this.root) this.root = children[0];
+                    return [this.root, ...children];
+                }`;
 
 function patchFileTreeService() {
   if (!fs.existsSync(FTSERVICE_FILE)) {
@@ -165,16 +205,34 @@ function patchFileTreeService() {
     return false;
   }
   let src = fs.readFileSync(FTSERVICE_FILE, 'utf-8');
-  if (src.includes(MARKER_RECOVER)) {
-    console.log('[patch-filetreemodel] FileTreeService.init 已 patch, 跳过');
+  // 新版 patch 双 marker (init 端 + resolveChildren 端), 都在即视为完整应用
+  if (src.includes(MARKER_KEEP_ROOT)) {
+    console.log('[patch-filetreemodel] FileTreeService 新版 patch 已应用, 跳过');
     return true;
+  }
+  // 旧版 patch (只有 __numasRecoverRoot, 没 __numasKeepRootOnResolve): revert 后重打
+  if (src.includes(MARKER_RECOVER)) {
+    console.log('[patch-filetreemodel] 检测到旧版 __numasRecoverRoot patch, revert 后重打');
+    const oldInitBlock = /        \/\/ numas patch \(__numasRecoverRoot\):[\s\S]*?window\.__numasInit\.rootName = __numasRoot\.name;\n            \}\n        \}\n/;
+    src = src.replace(oldInitBlock, '');
+    // resolveChildren 旧版 (含 __numasRecoverRoot 注释) 也 revert 到原版
+    const oldResolveBlock = /                    \/\/ numas patch \(__numasRecoverRoot\):[\s\S]*?return children;\n/;
+    src = src.replace(oldResolveBlock, '                    this.root = children[0];\n                    return children;\n');
   }
   if (!src.includes(FTSERVICE_OLD)) {
     console.warn('[patch-filetreemodel] FileTreeService.init OLD pattern 未匹配, 版本可能变化, 请检查', FTSERVICE_FILE);
     return false;
   }
-  fs.writeFileSync(FTSERVICE_FILE, src.replace(FTSERVICE_OLD, FTSERVICE_NEW));
-  console.log('[patch-filetreemodel] FileTreeService.init 兜底 fire patch applied');
+  // 1) init() 末尾插入 __numasRecoverRoot (fire + 创建根)
+  let out = src.replace(FTSERVICE_OLD, FTSERVICE_NEW);
+  // 2) resolveChildren() line 216 配套: children[0] 不再覆盖 this.root
+  if (out.includes(FTSERVICE_RESOLVE_OLD)) {
+    out = out.replace(FTSERVICE_RESOLVE_OLD, FTSERVICE_RESOLVE_NEW);
+  } else {
+    console.warn('[patch-filetreemodel] FileTreeService.resolveChildren OLD pattern 未匹配, 已 patch init 但 resolveChildren 仍是原版, 请检查', FTSERVICE_FILE);
+  }
+  fs.writeFileSync(FTSERVICE_FILE, out);
+  console.log('[patch-filetreemodel] FileTreeService.init 兜底 fire patch applied (+ resolveChildren 配套)');
   return true;
 }
 
