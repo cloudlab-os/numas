@@ -66,4 +66,12 @@ export const invalidate = <A, E, R>(self: InstanceState<A, E, R>) =>
     return yield* ScopedCache.invalidate(self.cache, yield* directory)
   })
 
+// Drop every per-directory entry. Used when a global (cross-instance) input changes — e.g.
+// auth.json, which is shared across all workspaces — and there is no request-scoped directory
+// (global control routes have no InstanceRef).
+export const invalidateAll = <A, E, R>(self: InstanceState<A, E, R>) =>
+  Effect.gen(function* () {
+    return yield* ScopedCache.invalidateAll(self.cache)
+  })
+
 export * as InstanceState from "./instance-state"

@@ -492,3 +492,22 @@ AI **仍需 `question`**:
   2. **「订阅 symlink path 也会归一化」的真相**: 单独跑 `@parcel/watcher` (sumi node_modules 已有) 写最小复现, 订阅 real / symlink / nested symlink, file path 无论订阅哪种都是 real. macOS fs-events、Linux inotify、Win ReadDirectoryChangesW 均归一化. 不要尝试"订阅 logical 让 parcel 给 logical path" — 无效.
   3. **`path.relative` 边界检测 vs `startsWith`**: `/app/222` 与 `/app/222x` 用 `startsWith` 都匹配, 用 `path.relative('/app/222', '/app/222x/foo')` 得 `../222x/foo` (越界), 检测越界必须 `relative.startsWith('..') || path.isAbsolute(relative) || relative === ''` 三选一 (relative=='' 时 file 就是 root 自身, 不需要替换 prefix).
   4. **logicalToRealPath 不该改 workspace 外路径**: 即便上游误传一个不在 realRoot 子树内的 path (e.g. 另一个 instance 的事件因 SSE 没过滤混入), 必须返回原值, 让上层 LocationServiceMap / VCS 等的 directory equality check (`event.location.directory !== ctx.directory`) 自行过滤, 不要替上游做语义判断.
+
+#### 25. UI 运行时填 API key 后模型 `ProviderModelNotFoundError: Model not found: <provider>/<model>. Did you mean: <model>?` (必须重启才生效)
+
+- **问题描述**: 容器起来后, 用户在「模型管理」(/connect 弹层) 给一个**启动时未连接**的服务商 (如 `minimax-cn-coding-plan`) 填 API key、选模型、发消息, 立刻报 `ProviderModelNotFoundError: Model not found: minimax-cn-coding-plan/MiniMax-M3. Did you mean: MiniMax-M3?`; `/provider` catalog 里该 provider 和模型明明都在; **重启容器后同 key 又正常**.
+- **根因 (不是分支差异! 先对 SHA)**:
+  1. Provider 运行时表是 **per-directory 惰性构建一次** 的 `InstanceState` (`provider.ts` 的 `InstanceState.make(state, ...)`), 闭包构建时 `auth.all()` **只读一次** key, 经 `mergeProvider` 把已连接 provider 合并进 `s.providers` (运行时激活表); 而 `/provider` 列表读的是 **catalog** (`s.database`, 含未连接 provider) — 两表分离.
+  2. UI 填 key 走 `PUT /auth/{id}` → `handlers/control.ts` 的 authSet **只 `auth.set()` 写 auth.json, 从不失效 Provider state**; `InstanceState.invalidate` 全仓只被 pty(location)/tui(config) 调用, Provider 从没失效过.
+  3. 于是运行时新增 key 后 `s.providers[id]` 仍空 → `getModel` 拿不到 provider → 用 catalog 给 suggestions 抛 `ModelNotFoundError`. 浏览器刷新**无效** (state 在服务端进程, 按 directory 缓存); 必须后端失效或重启.
+- **关键坑: 失效 API 选错上下文**: 首版修复用 `InstanceState.invalidate(state)` (内部 `ScopedCache.invalidate(cache, yield* directory)`), 但 `PUT /auth` 是 **RootHttpApi 全局 control 路由** (auth.json 跨 workspace 全局共享), **无 per-request `InstanceRef`/directory context** → invalidate 读 directory 直接 die → PUT 返回 **500** (`Unexpected server error`, ref err_xxx). 正确做法: 用 **`ScopedCache.invalidateAll`** (不依赖 directory) 失效所有 instance — auth 本就是全局的.
+- **解决方案 (已修)**:
+  - `src/effect/instance-state.ts` — 新增 `invalidateAll(self)` (`ScopedCache.invalidateAll(self.cache)`, 无需 directory context; 区别于 `invalidate(self)` 要 `yield* directory`).
+  - `src/provider/provider.ts` — `Interface` 加 `invalidateAll(): Effect<void>`; layer 内 `const invalidateAll = Effect.fn(...)(() => InstanceState.invalidateAll(state))` 并加入 `Service.of({...})`.
+  - `src/server/routes/instance/httpapi/handlers/control.ts` — authSet/authRemove 里 `auth.set/remove` 后 `yield* provider.invalidateAll()` (yield `Provider.Service`).
+  - 连带: `test/fake/provider.ts` 补 `invalidateAll: () => Effect.void`; `test/server/httpapi-global.test.ts` + `httpapi-control-plane.test.ts` 这两个直接 build controlHandlers 的测试补 `Layer.mock(Provider.Service)({})` (否则缺 Provider context 报 `Service not found`).
+- **验证方法**: ① 容器启动时**不**连目标 provider → 运行中 `PUT /auth/<id>` 填真 key → 不重启直接 `POST /session/.../prompt_async` 发消息 → 应 `finish=stop` 出真实回复 (修复前: `session.error` ModelNotFound); ② `DELETE /auth/<id>` 后发消息 → 应干净报 ModelNotFound (非 500); ③ 再 PUT 重连 → 恢复. 用 `/global/event` SSE 抓 `session.error` 事件看 message (prompt_async 返回 204, 错误只走 SSE, `/message` 里 assistant 消息可能不落盘).
+- **排查教训**:
+  1. **"切分支/重建镜像就好" 先别归因代码差异 — 先 `git rev-parse <branch>` 对 SHA**. 本例 main 与 feat/yunyan 是**同一 commit**, "好了" 的真实变量是**容器重启** (state 重建重读 auth.json), 不是分支.
+  2. **catalog ≠ 运行时激活表**: `/provider` 能列出 provider/model 只代表 catalog 有; 发消息能否用看 `s.providers` (InstanceState, 构建时快照 auth). 两表现象不一致是这类 bug 的指纹.
+  3. **全局路由 vs instance 路由的 context 边界**: handler 里调任何 `InstanceState.*` (隐式读 `directory`/`InstanceRef`) 前, 先确认该路由挂在 RootHttpApi(全局, 无 InstanceRef) 还是 InstanceHttpApi(有 directory). 全局资源 (auth/config) 变更用 `invalidateAll`.

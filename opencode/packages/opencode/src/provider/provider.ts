@@ -1199,6 +1199,15 @@ export interface Interface {
   ) => Effect.Effect<{ providerID: ProviderV2.ID; modelID: string } | undefined>
   readonly getSmallModel: (providerID: ProviderV2.ID) => Effect.Effect<Model | undefined>
   readonly defaultModel: () => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }, DefaultModelError>
+  /**
+   * Drop every per-directory provider state so it rebuilds from config/auth on next access.
+   * Required after a runtime auth change (PUT/DELETE /auth): the state is built once and
+   * snapshots `auth.all()` at construction, so a newly connected provider would otherwise
+   * stay missing from the active provider table until restart (ModelNotFoundError). Auth is
+   * global (auth.json), and the global control route has no request-scoped directory, so we
+   * invalidate all instances rather than one.
+   */
+  readonly invalidateAll: () => Effect.Effect<void>
 }
 
 interface State {
@@ -1865,6 +1874,10 @@ const layer = Layer.effect(
       InstanceState.use(state, (s) => s.providers[providerID]),
     )
 
+    // Rebuild all per-directory provider states on next access (auth.json is global and the
+    // auth control route has no request-scoped directory).
+    const invalidateAll = Effect.fn("Provider.invalidateAll")(() => InstanceState.invalidateAll(state))
+
     const getModel = Effect.fn("Provider.getModel")(function* (providerID: ProviderV2.ID, modelID: ModelV2.ID) {
       const s = yield* InstanceState.get(state)
       const provider = s.providers[providerID]
@@ -2036,7 +2049,7 @@ const layer = Layer.effect(
       }
     })
 
-    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
+    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel, invalidateAll })
   }),
 )
 

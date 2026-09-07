@@ -1,4 +1,5 @@
 import { Auth } from "@/auth"
+import { Provider } from "@/provider/provider"
 
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -9,12 +10,16 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (handlers) =>
   Effect.gen(function* () {
     const auth = yield* Auth.Service
+    const provider = yield* Provider.Service
 
     const authSet = Effect.fn("ControlHttpApi.authSet")(function* (ctx: {
       params: { providerID: ProviderV2.ID }
       payload: Auth.Info
     }) {
       yield* auth.set(ctx.params.providerID, ctx.payload).pipe(Effect.orDie)
+      // auth.json changed at runtime: provider state snapshots auth at build time, so
+      // invalidate all instances to activate/disconnect the provider without restart.
+      yield* provider.invalidateAll()
       return true
     })
 
@@ -22,6 +27,7 @@ export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (han
       params: { providerID: ProviderV2.ID }
     }) {
       yield* auth.remove(ctx.params.providerID).pipe(Effect.orDie)
+      yield* provider.invalidateAll()
       return true
     })
 
