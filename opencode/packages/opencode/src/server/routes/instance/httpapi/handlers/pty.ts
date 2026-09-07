@@ -1,4 +1,5 @@
 import * as InstanceState from "@/effect/instance-state"
+import path from "node:path"
 import { registerDisposer } from "@/effect/instance-registry"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { Plugin } from "@/plugin"
@@ -73,20 +74,27 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
       // numas: PTY 工作目录支持 body `cwd` (右键「在终端中打开」指定目录), 但必须位于
       // 本 instance (x-opencode-directory header) 目录之内, 防越界; 缺省 = instance 目录.
       const instanceDir = (yield* InstanceState.context).directory
-      if (ctx.payload.cwd) {
-        const resolvedCwd = FSUtil.resolve(ctx.payload.cwd)
-        if (!FSUtil.contains(FSUtil.resolve(instanceDir), resolvedCwd))
-          return yield* new HttpApiError.BadRequest({})
-      }
-      const cwd = ctx.payload.cwd ? FSUtil.resolve(ctx.payload.cwd) : instanceDir
-      const shell = yield* plugin.trigger("shell.env", { cwd }, { env: {} as Record<string, string> })
+      // numas: cwd 一律用「逻辑路径」(path.resolve 规范化, 不 realpath):
+      //  ① 边界校验 — 拦截直接 ../ 逃逸, 但放行 workspace 内 symlink 指向 workspace 外
+      //    (如 /home/community/333 -> /app/333), 与 core FileSystem.resolve 同一原则;
+      //  ② spawn cwd 传逻辑路径 — chdir 自身穿透 symlink 落到真实目录, 进程正常运行;
+      //  ③ 显式 PWD env = 逻辑路径 — shell (zsh/bash) 启动校验 $PWD 与 getcwd() inode
+      //    一致后信任它, 于是逻辑 pwd / 提示符显示 symlink 路径 (/home/community/333/sub)
+      //    而非物理路径 (/app/333/sub), 与 explorer 里看到的路径一致.
+      const logicalInstance = path.resolve(FSUtil.windowsPath(instanceDir))
+      const logicalCwd = ctx.payload.cwd
+        ? path.resolve(FSUtil.windowsPath(ctx.payload.cwd))
+        : logicalInstance
+      if (ctx.payload.cwd && !FSUtil.contains(logicalInstance, logicalCwd))
+        return yield* new HttpApiError.BadRequest({})
+      const shell = yield* plugin.trigger("shell.env", { cwd: logicalCwd }, { env: {} as Record<string, string> })
       const info = yield* pty(
         Pty.Service.use((service) =>
           service.create({
             ...ctx.payload,
             args: ctx.payload.args ? [...ctx.payload.args] : undefined,
-            cwd,
-            env: { ...ctx.payload.env, ...shell.env },
+            cwd: logicalCwd,
+            env: { ...ctx.payload.env, ...shell.env, PWD: logicalCwd },
           }),
         ),
       )

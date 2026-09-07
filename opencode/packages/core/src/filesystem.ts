@@ -113,13 +113,15 @@ const baseLayer = Layer.effect(
     const root = yield* fs.realPath(location.directory).pipe(Effect.orElseSucceed(() => location.directory))
     const resolve = Effect.fnUntraced(function* (input?: RelativePath) {
       const absolute = path.resolve(location.directory, FSUtil.windowsPath(input ?? "."))
+      // 逻辑路径 (未解析 symlink) 必须在 workspace 内 — 拦截直接 ../ 路径逃逸.
       if (!FSUtil.contains(location.directory, absolute))
         return yield* Effect.die(new Error("Path escapes the location"))
       // 文件/父目录不存在时 realPath 直接 ENOENT die (到不了下方 fs.stat 抛的标准
       // PlatformError NotFound, handler 的 fileSystem 包装识别不到 → 裸 500). 回退用
       // absolute, 让 fs.stat 给出权威 NotFound → 404. (与上方 root realPath orElseSucceed 同写法)
       const real = yield* fs.realPath(absolute).pipe(Effect.orElseSucceed(() => absolute))
-      if (!FSUtil.contains(root, real)) return yield* Effect.die(new Error("Path escapes the location"))
+      // 不再校验 contains(root, real): 逻辑路径已在 workspace 内, realPath 后允许落在 workspace 外,
+      // 以支持 workspace 内 symlink 指向外部目录 (如容器内 /app/333) 的展开/读取.
       return { absolute, real, directory: location.directory, root }
     })
     const resolveTarget = Effect.fnUntraced(function* (input: RelativePath) {
@@ -132,8 +134,6 @@ const baseLayer = Layer.effect(
         if (next === parent) return yield* Effect.die(new Error("Path escapes the location"))
         parent = next
       }
-      const parentReal = yield* fs.realPath(parent).pipe(Effect.orDie)
-      if (!FSUtil.contains(root, parentReal)) return yield* Effect.die(new Error("Path escapes the location"))
       return { absolute, directory: location.directory, root }
     })
     const toEntry = (
@@ -169,13 +169,33 @@ const baseLayer = Layer.effect(
         if (info.type !== "Directory") return yield* Effect.die(new Error("Path is not a directory"))
         return yield* fs.readDirectoryEntries(target.real).pipe(
           Effect.orDie,
-          Effect.map((items) =>
-            items
-              .flatMap((item) => {
-                if (item.type !== "file" && item.type !== "directory") return []
-                const absolute = path.join(target.absolute, item.name)
-                return [toEntry(absolute, target.directory, item.type)]
-              })
+          Effect.flatMap((items) =>
+            Effect.forEach(
+              items,
+              (item) =>
+                Effect.gen(function* () {
+                  // Resolve symlink target via stat (effect FileSystem.stat follows symlinks by default).
+                  // 协议 contract 限制 Entry.type ∈ {file, directory}, 无法新增 symlink 字面量 — 把 symlink
+                  // 按其 target 类型归一化: 指向目录 → directory, 指向文件 → file, broken symlink → 跳过
+                  // (与原版 strict file/directory 行为一致, 不引入新 type). 容器内 host 挂载 symlink
+                  // (e.g. 中文路径) 也能在 explorer 看到.
+                  const effectiveType =
+                    item.type === "file" || item.type === "directory"
+                      ? item.type
+                      : (yield* fs.stat(path.join(target.real, item.name)).pipe(
+                          Effect.map((s) => (s.type === "Directory" ? "directory" : "file")),
+                          Effect.catch(() => Effect.succeed(null as "file" | "directory" | null)),
+                        ))
+                  if (!effectiveType) return []
+                  const absolute = path.join(target.absolute, item.name)
+                  return [toEntry(absolute, target.directory, effectiveType)]
+                }).pipe(Effect.orDie),
+              { concurrency: "unbounded" },
+            ),
+          ),
+          Effect.map((rows) =>
+            rows
+              .flat()
               .sort((a, b) => (a.type === b.type ? a.path.localeCompare(b.path) : a.type === "directory" ? -1 : 1)),
           ),
         )
