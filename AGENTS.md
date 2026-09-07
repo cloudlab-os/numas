@@ -355,7 +355,7 @@ AI **仍需 `question`**:
 
 - **问题描述**: sumi postinstall patch (storage 路径) 与 Dockerfile 已改, 但容器内 binary 仍是旧产物 (marker 为 0), 用户验证仍失败, 误判方案无效.
 - **复现路径**: 改 Dockerfile/package.json/patch 后直接跑旧镜像验证.
-- **解决方案**: 验证前先确认"运行中产物"确实含改动: docker 镜像用 `docker exec strings /app/... | grep marker`; 本地 dist 用 grep marker; 交叉/重编产物看构建时间戳. 先对产物版本, 再谈方案对错.
+- **解决方案**: 验证前先确认"运行中产物"确实含改动: docker 镜像用 `docker exec strings /root/.numas/exec/opencode | grep marker`; 本地 dist 用 grep marker; 交叉/重编产物看构建时间戳. 先对产物版本, 再谈方案对错.
 
 #### 12. 改完源码忘了重编产物就验证 → 旧产物报错误导排查
 

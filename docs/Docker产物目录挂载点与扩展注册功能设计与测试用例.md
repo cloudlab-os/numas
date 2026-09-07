@@ -9,9 +9,9 @@
 ### 1.1 整体结构
 
 ```
-容器 (ubuntu:24.04, USER root, workdir /app)
+容器 (ubuntu:24.04, USER root, workdir /home/community)
 │
-├── /app                      工作区根 (explorer 只见用户文件; 默认 workdir, NUMAS_WORKDIR 可切)
+├── /home/community           工作区根 (explorer 只见用户文件; 默认 workdir, NUMAS_WORKDIR 可切)
 └── /root/.numas/             程序根 (镜像内置默认, 每子目录可被 -v volume 覆盖)
     ├── exec/opencode         opencode 单二进制 (含内置 /extensions 市场控制器; OPENCODE_ARTIFACT 定 arch)
     ├── ui/                   sumi web 静态产物 (entrypoint 默认 --web-ui /root/.numas/ui)
@@ -28,7 +28,7 @@
   改为 opencode fork 内置 `/extensions` 同源端点 (扫描 .vsix → metadata + 静态分发),
   单进程无竞态; 历史对比见 §1.3
 - **extensions 动态添加**: 目录签名 (mtime/size) 失效缓存, 新 .vsix 放入即自动识别
-- **workdir 与程序根正交**: 工作区根 (/app) 与 ~/.numas 无耦合
+- **workdir 与程序根正交**: 工作区根 (/home/community) 与 ~/.numas 无耦合
 
 ### 1.3 核心链路
 
@@ -70,12 +70,12 @@
 - X.3-4 **指定目录**: registry-server 以 `--vsix-dir <其它路径>` 启动 (开发/单测), metadata 内容随指定目录变化
 
 ### 2.4 workdir 正交 (X.4-1 ~ X.4-2)
-- X.4-1 默认 `docker run` workdir=/app, UI 资源/扩展/registry 均正常 (不依赖 workdir)
+- X.4-1 默认 `docker run` workdir=/home/community, UI 资源/扩展/registry 均正常 (不依赖 workdir)
 - X.4-2 `-e NUMAS_WORKDIR=/workspace` (容器预建) 后同样正常, explorer 根为 /workspace
 
 ### 2.5 回归 (X.5-1 ~ X.5-3)
 - X.5-1 容器首启 storage 无 mkdir 500 复现 (二次刷新归零), 路径为 /root/.codeblitz
-- X.5-2 `/root/.numas` 不出现在 /app explorer 文件树
+- X.5-2 `/root/.numas` 不出现在 /home/community explorer 文件树
 - X.5-3 `-e PORT=8080` + `-p 8080:8080` 生效
 
 ## 3. 待确认/待验证项

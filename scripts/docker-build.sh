@@ -179,6 +179,6 @@ fi
 echo ""
 echo "[numas] 构建完成: ${TAGS[*]}"
 echo "[numas]   运行: docker run --rm -p 4096:4096 ${TAGS[1]:-${TAGS[0]}}"
-echo "[numas]   挂项目目录: docker run --rm -p 4096:4096 -v \"\$(pwd):/app\" ${TAGS[1]:-${TAGS[0]}}"
+echo "[numas]   挂项目目录: docker run --rm -p 4096:4096 -v \"\$(pwd):/home/community\" ${TAGS[1]:-${TAGS[0]}}"
 echo "[numas]   改端口 (-e PORT 改容器内监听, -p 宿主映射必须配套一致):"
 echo "[numas]     docker run --rm -p 8080:8080 -e PORT=8080 ${TAGS[1]:-${TAGS[0]}}"

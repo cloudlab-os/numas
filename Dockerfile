@@ -68,7 +68,7 @@ RUN apt-get update \
 # 与自建服务用户冲突, 不再 useradd)
 USER root
 
-# 容器内根 = /app (workdir + 默认工作区根, explorer 只见用户文件);
+# 容器内工作区根 = /home/community (workdir + 默认工作区根, explorer 只见用户文件);
 # 程序目录 ~/.numas (root → /root/.numas, 不进工作区) — 挂载点 (设计文档
 # docs/Docker产物目录挂载点与扩展注册功能设计与测试用例.md):
 #   exec/        opencode 可执行程序 (含内置 /extensions 扩展市场控制器)
@@ -77,7 +77,7 @@ USER root
 #                registry/vsix 同构, 动态识别新增 .vsix)
 # 每目录镜像内置默认产物 (交付即用), 运维可 -v volume 覆盖任一目录升级, 不重建镜像.
 # 注: 扩展市场由 opencode fork 内置 (/extensions 同源端点), 无独立 registry 进程.
-WORKDIR /app
+WORKDIR /home/community
 RUN mkdir -p /root/.numas/exec /root/.numas/ui /root/.numas/extensions
 
 # ① exec: opencode 单二进制 — arch 由构建脚本显式传入 (docker-build.sh 传 OPENCODE_ARTIFACT,

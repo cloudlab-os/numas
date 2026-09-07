@@ -11,13 +11,13 @@
 #   CORS          / NUMAS_CORS          → --cors     (默认 '*')
 #   REGISTRY      / NUMAS_REGISTRY      → --registry (默认 /extensions = fork 内置扩展市场)
 #   WEB_UI        / NUMAS_WEB_UI        → --web-ui   (默认 /root/.numas/ui, 镜像内拷贝的 sumi 产物)
-#   WORKDIR       / NUMAS_WORKDIR       → cd         (默认 /app, 决定 instance dir)
+#   WORKDIR       / NUMAS_WORKDIR       → cd         (默认 /home/community, 决定 instance dir)
 #   SUBCMD        / NUMAS_SUBCMD        → 子命令     (默认 web; 可换 serve/acp/...)
 #   EXTENSIONS_DIR / NUMAS_EXTENSIONS_DIR → --extensions-dir (默认 /root/.numas/extensions)
 #
 # 例:
 #   docker run --rm -p 4096:4096 numas:latest
-#   docker run --rm -p 4096:4096 -v $(pwd):/app numas:latest
+#   docker run --rm -p 4096:4096 -v $(pwd):/home/community numas:latest
 #   docker run --rm -p 9000:9000 -e PORT=9000 numas:latest
 #   docker run --rm -p 4096:4096 -e REGISTRY=http://host:7790 numas:latest
 #   docker run --rm -p 4096:4096 -e WEB_UI=/ui numas:latest
@@ -49,8 +49,8 @@ CORS=$(v NUMAS_CORS CORS '*')
 REGISTRY=$(v NUMAS_REGISTRY REGISTRY /extensions)
 # 默认指向镜像内拷贝的 sumi 静态产物 (替换 UI = 本地重 build sumi + 重构建镜像)
 WEB_UI=$(v NUMAS_WEB_UI WEB_UI /root/.numas/ui)
-# 默认工作目录 = 容器根 /app (workdir 即容器内 workspace 根; NUMAS_WORKDIR 可覆盖)
-WORKDIR_VAL=$(v NUMAS_WORKDIR WORKDIR /app)
+# 默认工作目录 = /home/community (workdir 即容器内 workspace 根; NUMAS_WORKDIR 可覆盖)
+WORKDIR_VAL=$(v NUMAS_WORKDIR WORKDIR /home/community)
 SUBCMD=$(v NUMAS_SUBCMD SUBCMD web)
 # 扩展市场扫描目录 (内置 /extensions 控制器; 与工程 registry/vsix 同构, 动态识别新增 .vsix)
 EXTENSIONS_DIR=$(v NUMAS_EXTENSIONS_DIR EXTENSIONS_DIR /root/.numas/extensions)

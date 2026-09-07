@@ -352,7 +352,7 @@ classDiagram
 | 来源 | 集成模式构建产物 (`sumi/dist` 静态资源 + opencode 服务端单进程) |
 | 启动命令 | `opencode web --hostname 0.0.0.0 --port 24096 --cors *` (无头模式, 不自动开浏览器) |
 | 容器端口 | `24096`: WebUI 与 Agent API 同端口 (网关抽象出 webui / agent 两个转发端口, 均指向该容器端口, 可配置) |
-| 工作区 | `/app`, PVC 子路径持久化 (全局共享配置 + `{userId}` 用户数据 + 运行时工作区) |
+| 工作区 | `/home/community`, PVC 子路径持久化 (全局共享配置 + `{userId}` 用户数据 + 运行时工作区) |
 
 ### 6.2 架构总览
 
