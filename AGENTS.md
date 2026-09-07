@@ -526,3 +526,42 @@ AI **仍需 `question`**:
   1. **fork 的 title 任务 vs prompt 主循环 abort**: `Effect.forkIn(scope)` 出的标题生成不随 prompt abort 取消, 所以"点停止"一般不丢标题; 丢标题要查 title fork **内部是否失败** (getModel 报错) — 别只盯着 abort.
   2. **空 assistant 消息是 abort 指纹, 报错不留 assistant 行**: `parts=[] && finish=None && error=null` = 中断在产出前; `session.error` SSE 事件 + 无 assistant 行 = 报错. 前端区分这两类才能给对状态 (中断→"已停止生成", 报错→红色横幅).
   3. **前端静默 abort 错误是对的** (不弹红框), 但静默不等于不展示 — 中断状态要在消息流里用占位表达.
+#### 27. chat webview 是 codeblitz 内联组件, 可用 `useInjectable` 拿框架服务 (如 `IMessageService`)
+
+- **现象**: 想在 chat webview 弹 codeblitz 原生 toast 通知 (`IMessageService.info`), 担心 webview 隔离无法访问 DI. 实际 `extensions/chat/module.ts` 用 `registerComponent` 把 `Chat` 组件注册到 `SlotLocation.right`, 是 **内联 React 组件 (跟其他 panel 一样在 codeblitz React tree 渲染)**, 完整继承框架 DI 容器, 可直接 `useInjectable`.
+- **根因**: 误把 codeblitz 内联 webview 当 iframe/沙箱. codeblitz 真正用 iframe 隔离的只有 webview extension (vscode `webview` API), 而 `registerComponent` 注册的 React 组件是无缝嵌入主框架的.
+- **正解**:
+  ```ts
+  import { useInjectable } from '@opensumi/ide-core-browser/lib/react-hooks/injectable-hooks';
+  import { IMessageService } from '@opensumi/ide-overlay'; // 从 ide-overlay/common 取 token
+  const messageService = useInjectable<IMessageService>(IMessageService);
+  messageService?.info('已复制');
+  ```
+  `@opensumi/ide-overlay` 是传递依赖 (codeblitz 注入层会注册实现), 直接 import token 可用.
+- **相关路径**: `IMessageService.info/warning/error(message, buttons?, closable?, props?)` — `MayCancelablePromise<string | undefined>`.
+- **排查方法**: 想要"用 codeblitz 原生 UI" 时, 先确认当前组件是 `registerComponent` (内联) 还是 vscode webview (隔离). 前者全开 DI, 后者要 postMessage.
+
+#### 28. 文本可选问题排查: 全局 `user-select: none` 在父容器, 文本子元素需显式 `user-select: text` 才可选
+
+- **现象**: chat 消息正文/用户气泡/工具代码块鼠标拖不动选不中, 复制按钮也选不出连续多行.
+- **根因**: 框架层 (`@opensumi/ide-core-browser` 的全局 / `.workbench` 等) 或父容器设了 `user-select: none` 防止 UI 误选, **CSS 不会自动继承允许**; 子元素想可选必须显式声明 `user-select: text`.
+- **正解** (本项目 `sumi/src/extensions/chat/webview/styles.ts`):
+  ```css
+  .chat__msg-body, .chat__msg-user-text, .tool__code {
+    user-select: text; /* 但 head/button/icon 保持 none, 避免拖动折叠按钮时选中文本 */
+  }
+  ```
+- **保持 `user-select: none` 的元素** (按钮/标题/状态栏, 不允许误选): `.chat__todos-head` / `.chat__modal-item` / `.q__head` / `.chat__qmodal-caret` / `.tool__caret` / `.sub__out > summary` / `.sub__head` / `.sub__dot` 等. grep 现有 `user-select: none` 区分"该禁选"和"误伤"两类.
+- **排查方法**: 1) DevTools 选中目标元素看 computed style `user-select`, 2) 检查所有父级选择器 (尤其 body/workbench 全局), 3) 不要"全局放开"会破坏按钮/标题的不可选体验, 精准放到文本容器.
+
+#### 29. 卡片标题左/折叠按钮右布局: caret 必须 `margin-left: auto`, 父级 `display: flex` 才生效; 新子组件别漏 styles.ts
+
+- **现象**: 工具/卡片 head `[icon, name, status, caret]` DOM 顺序, 视觉上 caret 紧贴 status 而不是贴右, 标题框左右不平衡.
+- **根因**: 父级 `.tool__head` 已是 `display: flex; gap: 8px;` 但 caret 没 `margin-left: auto`, 默认自然流挨着上一个元素. 同理 `.todo__title` 用 `flex: 1` 撑开只让 `.todo__caret` 贴右, 但 `.tool__caret` 没声明 → 失败.
+- **正解** (本项目 `sumi/src/extensions/chat/webview/styles.ts`):
+  ```css
+  .tool__caret, .todo__caret { margin-left: auto; }
+  ```
+  或者把"撑开元素" (title / summary) 设 `flex: 1; min-width: 0` (`reason__caret` 也靠 `margin-left: auto` 居右, 模式统一).
+- **附加**: `.sub` 卡片 (委派子任务) 在 `SubAgentCard.tsx` 用 `sub__head` 类但 **styles.ts 完全没有定义**, 渲染时是裸 DOM (默认 block 流, 全宽). 新增子组件务必 grep styles.ts 确认样式存在, 否则 fallback 到浏览器默认渲染. 补法参考 `.todo` / `.reason` 玻璃卡片风格 (圆角 + `--ai-input-bg` 背景 + 1px divider).
+- **排查方法**: 1) 改布局前看 DOM 结构和 CSS 类名是否齐全 (`grep className` 与 `grep -n "\.类名"` 交叉), 2) 折叠 caret 靠右两种写法选其一 (margin-left:auto 或 flex:1 撑开), 项目内统一一种, 3) 子组件新增先建空 styles.ts 段占位, 避免裸 DOM.
