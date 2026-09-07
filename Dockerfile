@@ -79,7 +79,13 @@ RUN apt-get update \
   # 生成 C.UTF-8 locale (镜像内不装 zh_CN.UTF-8 太重, C.UTF-8 已是 POSIX 兼容的 UTF-8 locale)
   && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
   && locale-gen \
-  && update-locale LANG=C.UTF-8
+  && update-locale LANG=C.UTF-8 \
+  # git 中文: core.quotepath=false 让 git status/diff 直接显示中文文件名 (默认 true 会把
+  # 非 ASCII 路径转义成八进制 "\346\226\260...", 终端/AI 看到乱码串); 显式声明 UTF-8 编码.
+  # 写 $HOME=/home/.gitconfig (ENV HOME 见下), 全局对 root 的所有仓库生效.
+  && git config --global core.quotepath false \
+  && git config --global i18n.commitEncoding utf-8 \
+  && git config --global i18n.logOutputEncoding utf-8
 
 # 默认 UTF-8 locale: opencode fs 操作 (readdir/stat) 读中文路径正确解码, 容器内 zsh/python 也
 # 默认 UTF-8 输出. C.UTF-8 是 POSIX 兼容的 UTF-8, 不依赖额外语言包.
